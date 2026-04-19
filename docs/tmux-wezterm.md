@@ -71,37 +71,95 @@ Add to `~/.config/opencode/opencode-notifier.json`:
 }
 ```
 
-## `@opencode_waiting` fallback (tmux.conf)
+## `tmux.conf` changes (drop-in block)
 
 With the default `"auto"` indicator backend, the plugin **always** writes
 the tmux user-option `@opencode_waiting` on the window where opencode is
 waiting, **and** — if the `workmux` CLI is on PATH — additionally calls
-`workmux set-window-status` so workmux's own glyph can win when it fires.
-That way you get a reliable fallback whenever workmux doesn't manage to
-set a symbol (which happens intermittently).
+`workmux set-window-status` so workmux's own glyph (`@workmux_status`)
+can win when it fires. That way you get a reliable fallback whenever
+workmux doesn't manage to set a symbol (which happens intermittently).
 
-Recommended tmux format conditional: prefer workmux, fall back to the
-`@opencode_waiting` dot. Tell tmux to render **one** of them, not both.
+Three places can render the indicator:
+
+1. the **status line** on each window tab,
+2. the **session picker** (`prefix s` / `choose-tree -Zs`) — a dot next
+   to any session that contains a waiting window,
+3. the **window picker** (`prefix w` / `choose-tree -Zw`) — a dot next
+   to the waiting window inside the expanded session.
+
+Copy this block verbatim into `tmux.conf`. It's self-contained: if you
+don't use workmux the `@workmux_status` branches render nothing and only
+the opencode dot shows; if you do, workmux wins and opencode is the
+fallback. Plays nicely with existing workmux keybindings like
+`bind a run-shell "workmux last-done"` — those live elsewhere in your
+config and don't interact with formats.
 
 ```tmux
-# Render workmux's status if it set one, otherwise opencode's waiting dot,
-# otherwise nothing. Drop this into your window-status formats. Style to
-# taste - the example below uses cyan for the opencode fallback so it's
-# visually distinct from workmux's glyph.
-setw -g window-status-current-format '#{?@workmux_status,#[fg=colour3] #{@workmux_status},#{?@opencode_waiting,#[fg=colour153] #{@opencode_waiting},}} #I:#W#F '
-setw -g window-status-format         '#{?@workmux_status,#[fg=colour3] #{@workmux_status},#{?@opencode_waiting,#[fg=colour153] #{@opencode_waiting},}} #I:#W#F '
+# =======================================================================
+# opencode-notifier + workmux waiting-indicator integration
+# Docs: docs/tmux-wezterm.md in
+# https://github.com/alexnguyennn/opencode-notifier
+# =======================================================================
 
-# Auto-clear the opencode marker when the user focuses the window, even if
-# opencode didn't emit an event. Matches workmux's own auto-clear-on-focus
-# behaviour so the two cooperate.
+# --- 1. status line ----------------------------------------------------
+# Prefer workmux's glyph when it set one; fall back to the opencode
+# waiting dot (set by the plugin even when workmux is installed).
+# Style to taste. The example below uses tmux-power defaults so you can
+# adapt colour codes to whatever theme you run.
+setw -g window-status-current-format '#[fg=#262626,bg=colour3]#[fg=#262626,bg=colour3,bold] #I:#W#F #[fg=colour3,bg=#262626,nobold]#{?@workmux_status, #{@workmux_status},#{?@opencode_waiting,#[fg=colour153] #{@opencode_waiting},}}'
+setw -g window-status-format         '#[fg=#262626,bg=#3a3a3a]#[fg=colour3,bg=#3a3a3a] #I:#W#F #[fg=#3a3a3a,bg=#262626]#{?@workmux_status, #{@workmux_status},#{?@opencode_waiting,#[fg=colour153] #{@opencode_waiting},}}'
+
+# --- 2. choose-tree: session + window pickers --------------------------
+# Rebind prefix-s / prefix-w to the format-aware variants. We extend
+# tmux's built-in three-branch default format (pane / window / session)
+# with two additions:
+#   - session row: trailing " ●" iff ANY window in the session has
+#     @opencode_waiting set (aggregated via #{W:...}).
+#   - window row:  trailing " ●" for the waiting window itself.
+# Workmux doesn't touch the picker, so this is purely additive.
+bind-key s choose-tree -Zs -F "#{?pane_format,\
+#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,},\
+#{?window_format,\
+#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?@opencode_waiting, #{@opencode_waiting},},\
+#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}#{?#{W:#{?@opencode_waiting,1,}}, ●,}\
+}}"
+bind-key w choose-tree -Zw -F "#{?pane_format,\
+#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,},\
+#{?window_format,\
+#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?@opencode_waiting, #{@opencode_waiting},},\
+#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}#{?#{W:#{?@opencode_waiting,1,}}, ●,}\
+}}"
+
+# --- 3. auto-clear on focus --------------------------------------------
+# Drop the opencode marker the moment you land on the window, even if
+# opencode didn't emit an event. Matches workmux's own auto-clear-on-
+# focus behaviour so the two cooperate.
 set-hook -g after-select-window    'set-window-option -q -u @opencode_waiting'
 set-hook -g session-window-changed 'set-window-option -q -u @opencode_waiting'
 set-hook -g client-focus-in        'set-window-option -q -u @opencode_waiting'
+
+# =======================================================================
+# End opencode-notifier block.
+# =======================================================================
 ```
 
-If your existing tmux.conf already has a `window-status-format` that
-renders workmux, you only need to **extend the conditional** to check
-`@opencode_waiting` as a second branch. Example, turning this:
+Reload tmux (`tmux source-file ~/.tmux.conf` or `tmux kill-server` +
+re-enter) and you're done.
+
+### Nix / Home Manager users
+
+If tmux is generated by Nix, paste the above block into whichever module
+drives `programs.tmux.extraConfig` (nix-darwin / home-manager) and
+rebuild. The backslash line-continuations survive Nix string escaping
+fine inside `extraConfig = '' ... ''` (which disables interpolation).
+
+### Existing custom `window-status-format`?
+
+If you already have a styled `window-status-format` (common with
+tmux-power, tmux-powerline, etc.), don't wholesale replace it — just
+**extend** the format conditional that renders workmux. Example turning
+this:
 
 ```tmux
 window-status-format "#[fg=colour3,bg=#3a3a3a] #I:#W#F #{?@workmux_status, #{@workmux_status},}"
@@ -113,10 +171,23 @@ into this:
 window-status-format "#[fg=colour3,bg=#3a3a3a] #I:#W#F #{?@workmux_status, #{@workmux_status},#{?@opencode_waiting, #{@opencode_waiting},}}"
 ```
 
-(And identically for `window-status-current-format`.)
+(and identically for `window-status-current-format`). The key
+structural change is the nested conditional in the "else" branch:
+`#{?@workmux_status,<workmux glyph>,<opencode dot>}`.
 
-If you use Home Manager / Nix to manage tmux, port these lines into your
-module (the exact location is tool-specific — e.g. `programs.tmux.extraConfig`).
+### Test without waiting for opencode
+
+```bash
+# Mark the current window as waiting:
+tmux set-window-option @opencode_waiting '●'
+# All three indicators should now show:
+#   - the window tab on the status line  → ●
+#   - prefix s picker, current session   → ● at end of line
+#   - prefix w picker, current window    → ● next to window name
+#
+# Clean up:
+tmux set-window-option -u @opencode_waiting
+```
 
 ### Opting out / opting in harder
 
@@ -125,65 +196,6 @@ module (the exact location is tool-specific — e.g. `programs.tmux.extraConfig`
 - Don't have workmux and want only the `@opencode_waiting` path? Set
   `"tmux": { "indicator": "window-option" }`.
 - Don't want any tmux writes? Set `"tmux": { "indicator": "off" }`.
-
-## Session picker (`choose-tree`) indicator
-
-The same `@opencode_waiting` window option can light up the `prefix s`
-session picker: tmux's format language includes a per-session window
-iterator, `#{W:…}`, which concatenates the inner template once per window
-in that session. Pairing it with the empty-string-as-false conditional
-lets you render a dot next to any session that contains at least one
-waiting window. Workmux doesn't touch the picker, so this is purely
-additive.
-
-Default keybinding for the picker on a stock tmux install is:
-
-```tmux
-bind-key s choose-tree -Zs
-bind-key w choose-tree -Zw
-```
-
-Replace them with the format-aware versions (multi-line braces used here
-for readability — tmux accepts them verbatim):
-
-```tmux
-bind-key s choose-tree -Zs -F "#{?pane_format,\
-#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,},\
-#{?window_format,\
-#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags},\
-#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}#{?#{W:#{?@opencode_waiting,1,}}, ●,}\
-}}"
-
-bind-key w choose-tree -Zw -F "#{?pane_format,\
-#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,},\
-#{?window_format,\
-#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?@opencode_waiting, #{@opencode_waiting},},\
-#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}#{?#{W:#{?@opencode_waiting,1,}}, ●,}\
-}}"
-```
-
-What those formats are: tmux's three-branch `WINDOW_TREE_DEFAULT_FORMAT`
-(pane branch / window branch / session branch) with two small additions:
-
-- **Session branch** (the row you see in `-Zs` mode or a collapsed
-  session in `-Zw` mode): append
-  `#{?#{W:#{?@opencode_waiting,1,}}, ●,}`. This expands to ` ●` iff at
-  least one window under that session has `@opencode_waiting` set.
-- **Window branch** (expanded rows under a session): append
-  `#{?@opencode_waiting, #{@opencode_waiting},}` so the dot also shows
-  next to the window whose agent is waiting.
-
-### Test it without waiting for opencode
-
-```bash
-# Manually mark the current window as waiting:
-tmux set-window-option @opencode_waiting '●'
-# Open the picker:
-tmux choose-tree -Zs
-#   → the session you're in should have ` ●` appended.
-# Clean up:
-tmux set-window-option -u @opencode_waiting
-```
 
 ## Troubleshooting
 
