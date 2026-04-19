@@ -126,6 +126,65 @@ module (the exact location is tool-specific — e.g. `programs.tmux.extraConfig`
   `"tmux": { "indicator": "window-option" }`.
 - Don't want any tmux writes? Set `"tmux": { "indicator": "off" }`.
 
+## Session picker (`choose-tree`) indicator
+
+The same `@opencode_waiting` window option can light up the `prefix s`
+session picker: tmux's format language includes a per-session window
+iterator, `#{W:…}`, which concatenates the inner template once per window
+in that session. Pairing it with the empty-string-as-false conditional
+lets you render a dot next to any session that contains at least one
+waiting window. Workmux doesn't touch the picker, so this is purely
+additive.
+
+Default keybinding for the picker on a stock tmux install is:
+
+```tmux
+bind-key s choose-tree -Zs
+bind-key w choose-tree -Zw
+```
+
+Replace them with the format-aware versions (multi-line braces used here
+for readability — tmux accepts them verbatim):
+
+```tmux
+bind-key s choose-tree -Zs -F "#{?pane_format,\
+#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,},\
+#{?window_format,\
+#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags},\
+#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}#{?#{W:#{?@opencode_waiting,1,}}, ●,}\
+}}"
+
+bind-key w choose-tree -Zw -F "#{?pane_format,\
+#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,},\
+#{?window_format,\
+#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?@opencode_waiting, #{@opencode_waiting},},\
+#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}#{?#{W:#{?@opencode_waiting,1,}}, ●,}\
+}}"
+```
+
+What those formats are: tmux's three-branch `WINDOW_TREE_DEFAULT_FORMAT`
+(pane branch / window branch / session branch) with two small additions:
+
+- **Session branch** (the row you see in `-Zs` mode or a collapsed
+  session in `-Zw` mode): append
+  `#{?#{W:#{?@opencode_waiting,1,}}, ●,}`. This expands to ` ●` iff at
+  least one window under that session has `@opencode_waiting` set.
+- **Window branch** (expanded rows under a session): append
+  `#{?@opencode_waiting, #{@opencode_waiting},}` so the dot also shows
+  next to the window whose agent is waiting.
+
+### Test it without waiting for opencode
+
+```bash
+# Manually mark the current window as waiting:
+tmux set-window-option @opencode_waiting '●'
+# Open the picker:
+tmux choose-tree -Zs
+#   → the session you're in should have ` ●` appended.
+# Clean up:
+tmux set-window-option -u @opencode_waiting
+```
+
 ## Troubleshooting
 
 ### Click does nothing / opens Script Editor
