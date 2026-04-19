@@ -55,10 +55,17 @@ Add to `~/.config/opencode/opencode-notifier.json`:
     "clickToFocus": true,
 
     // Waiting-indicator backend:
-    //   "auto"          → workmux if the binary is on PATH, else window-option
-    //   "workmux"       → always call `workmux set-window-status <state>`
-    //   "window-option" → set tmux @opencode_waiting window option (see below)
-    //   "off"           → never touch tmux
+    //   "auto"          → write BOTH @opencode_waiting (always) and call
+    //                     workmux set-window-status (if workmux on PATH).
+    //                     Pair with the tmux format conditional below to
+    //                     render workmux's glyph when set and the opencode
+    //                     fallback otherwise. Recommended.
+    //   "workmux"       → only call `workmux set-window-status`; don't
+    //                     write @opencode_waiting. Use when you fully
+    //                     trust workmux and don't want the fallback.
+    //   "window-option" → only set @opencode_waiting; don't call workmux.
+    //                     Use when workmux isn't installed at all.
+    //   "off"           → never touch the tmux status line.
     "indicator": "auto"
   }
 }
@@ -66,31 +73,58 @@ Add to `~/.config/opencode/opencode-notifier.json`:
 
 ## `@opencode_waiting` fallback (tmux.conf)
 
-When the `window-option` indicator backend is active (i.e. no `workmux` on
-PATH), the plugin sets the tmux user-option `@opencode_waiting` to `●` on the
-window where opencode is waiting. Render it in your status line by adding
-these lines to `tmux.conf`:
+With the default `"auto"` indicator backend, the plugin **always** writes
+the tmux user-option `@opencode_waiting` on the window where opencode is
+waiting, **and** — if the `workmux` CLI is on PATH — additionally calls
+`workmux set-window-status` so workmux's own glyph can win when it fires.
+That way you get a reliable fallback whenever workmux doesn't manage to
+set a symbol (which happens intermittently).
+
+Recommended tmux format conditional: prefer workmux, fall back to the
+`@opencode_waiting` dot. Tell tmux to render **one** of them, not both.
 
 ```tmux
-# Waiting indicator for opencode (from the opencode-notifier plugin).
-# The format conditional `#{?@opencode_waiting,…,}` shows the symbol +
-# styling only when the user-option is set on the window.
-setw -g window-status-current-format ' #{?@opencode_waiting,#[fg=colour153]#{@opencode_waiting} ,}#I:#W#F '
-setw -g window-status-format         ' #{?@opencode_waiting,#[fg=colour153]#{@opencode_waiting} ,}#I:#W#F '
+# Render workmux's status if it set one, otherwise opencode's waiting dot,
+# otherwise nothing. Drop this into your window-status formats. Style to
+# taste - the example below uses cyan for the opencode fallback so it's
+# visually distinct from workmux's glyph.
+setw -g window-status-current-format '#{?@workmux_status,#[fg=colour3] #{@workmux_status},#{?@opencode_waiting,#[fg=colour153] #{@opencode_waiting},}} #I:#W#F '
+setw -g window-status-format         '#{?@workmux_status,#[fg=colour3] #{@workmux_status},#{?@opencode_waiting,#[fg=colour153] #{@opencode_waiting},}} #I:#W#F '
 
-# Auto-clear the marker when the user lands on the window, even if opencode
-# didn't emit an event.
+# Auto-clear the opencode marker when the user focuses the window, even if
+# opencode didn't emit an event. Matches workmux's own auto-clear-on-focus
+# behaviour so the two cooperate.
 set-hook -g after-select-window    'set-window-option -q -u @opencode_waiting'
 set-hook -g session-window-changed 'set-window-option -q -u @opencode_waiting'
 set-hook -g client-focus-in        'set-window-option -q -u @opencode_waiting'
 ```
 
+If your existing tmux.conf already has a `window-status-format` that
+renders workmux, you only need to **extend the conditional** to check
+`@opencode_waiting` as a second branch. Example, turning this:
+
+```tmux
+window-status-format "#[fg=colour3,bg=#3a3a3a] #I:#W#F #{?@workmux_status, #{@workmux_status},}"
+```
+
+into this:
+
+```tmux
+window-status-format "#[fg=colour3,bg=#3a3a3a] #I:#W#F #{?@workmux_status, #{@workmux_status},#{?@opencode_waiting, #{@opencode_waiting},}}"
+```
+
+(And identically for `window-status-current-format`.)
+
 If you use Home Manager / Nix to manage tmux, port these lines into your
 module (the exact location is tool-specific — e.g. `programs.tmux.extraConfig`).
 
-If `workmux` is on PATH the plugin's default `"auto"` indicator backend
-defers to `workmux set-window-status` and you do not need the tmux.conf
-snippet above.
+### Opting out / opting in harder
+
+- Don't want the fallback at all, only workmux? Set
+  `"tmux": { "indicator": "workmux" }` in `opencode-notifier.json`.
+- Don't have workmux and want only the `@opencode_waiting` path? Set
+  `"tmux": { "indicator": "window-option" }`.
+- Don't want any tmux writes? Set `"tmux": { "indicator": "off" }`.
 
 ## Troubleshooting
 
