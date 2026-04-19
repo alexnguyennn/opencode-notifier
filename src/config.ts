@@ -34,6 +34,30 @@ export interface LinuxConfig {
   grouping: boolean
 }
 
+export type TmuxIndicatorBackend = "auto" | "workmux" | "window-option" | "off"
+
+export interface TmuxConfig {
+  /** Click the notification to focus the tmux session opencode was launched in. macOS only. */
+  clickToFocus: boolean
+  /** Waiting-indicator backend. `auto` = workmux if on PATH, else @opencode_waiting window option. */
+  indicator: TmuxIndicatorBackend
+}
+
+/**
+ * macOS notifier backend:
+ *   - "auto":              terminal-notifier if on PATH (enables click-to-focus), else osascript
+ *   - "terminal-notifier": require terminal-notifier (click-to-focus works)
+ *   - "osascript":         legacy behaviour, no click-to-focus
+ *   - "node-notifier":     legacy behaviour, no click-to-focus
+ *   - "ghostty":           OSC 9 inline notification
+ */
+export type MacNotifier =
+  | "auto"
+  | "terminal-notifier"
+  | "osascript"
+  | "node-notifier"
+  | "ghostty"
+
 export interface MessageContext {
   sessionTitle?: string | null
   agentName?: string | null
@@ -53,6 +77,13 @@ export interface NotifierConfig {
   suppressWhenFocused: boolean
   enableOnDesktop: boolean
   notificationSystem: "osascript" | "node-notifier" | "ghostty"
+  /**
+   * macOS-only override. When set, takes precedence over `notificationSystem`
+   * on Darwin. Use `"auto"` (default) to get terminal-notifier-based
+   * click-to-focus when the binary is on PATH, with osascript as fallback.
+   */
+  macNotifier: MacNotifier
+  tmux: TmuxConfig
   linux: LinuxConfig
   command: CommandConfig
   events: {
@@ -127,6 +158,11 @@ const DEFAULT_CONFIG: NotifierConfig = {
   suppressWhenFocused: true,
   enableOnDesktop: false,
   notificationSystem: "osascript",
+  macNotifier: "auto",
+  tmux: {
+    clickToFocus: true,
+    indicator: "auto",
+  },
   linux: {
     grouping: false,
   },
@@ -295,6 +331,24 @@ export function loadConfig(): NotifierConfig {
           : userConfig.notificationSystem === "ghostty"
             ? "ghostty"
             : "osascript",
+      macNotifier: ((): MacNotifier => {
+        const raw = userConfig.macNotifier
+        if (raw === "terminal-notifier" || raw === "osascript" || raw === "node-notifier" || raw === "ghostty" || raw === "auto") {
+          return raw
+        }
+        return DEFAULT_CONFIG.macNotifier
+      })(),
+      tmux: {
+        clickToFocus:
+          typeof userConfig.tmux?.clickToFocus === "boolean"
+            ? userConfig.tmux.clickToFocus
+            : DEFAULT_CONFIG.tmux.clickToFocus,
+        indicator: ((): TmuxIndicatorBackend => {
+          const raw = userConfig.tmux?.indicator
+          if (raw === "auto" || raw === "workmux" || raw === "window-option" || raw === "off") return raw
+          return DEFAULT_CONFIG.tmux.indicator
+        })(),
+      },
       linux: {
         grouping: typeof userConfig.linux?.grouping === "boolean" ? userConfig.linux.grouping : DEFAULT_CONFIG.linux.grouping,
       },
