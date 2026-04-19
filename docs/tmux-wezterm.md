@@ -211,9 +211,43 @@ If absent, install and restart opencode.
 
 ### Wrong pane gets focused
 
-The plugin captures context only once at plugin init. If you started opencode
-outside tmux and later attached from tmux, the context is stale — restart
-opencode inside the target tmux pane.
+The helper resolves the correct WezTerm pane **at click time**, not at
+plugin init. It asks tmux which client tty is currently attached to the
+notifying session, then matches that tty against the `tty_name` field of
+`wezterm cli list` to find the exact WezTerm pane. So if you started
+opencode in one WezTerm pane and later detached / re-attached the tmux
+session from a different WezTerm pane, the click still focuses the live
+pane.
+
+If resolution fails (tmux session not currently attached to any WezTerm
+pane, or `wezterm cli` unavailable), the helper falls back to the
+`WEZTERM_PANE` that was captured when opencode started. That's the only
+case where the pane can be wrong — usually when the hosting pane was
+closed and a new pane took over the tmux session. Restart opencode in
+the new pane to re-capture.
+
+Verify resolution with the debug env var:
+
+```bash
+OPENCODE_FOCUS_DEBUG=/tmp/opencode-focus.log \
+  ~/bench/dev/opencode-notifier/scripts/opencode-focus-tmux.sh \
+  '<session_id>:<window_id>.<pane_id>' WezTerm "$WEZTERM_PANE"
+
+tail -40 /tmp/opencode-focus.log
+# look for lines:
+#   + RESOLVED_WEZTERM_PANE=<n>
+#   + RESOLVED_CLIENT_TTY=/dev/ttys<nn>
+#   + tmux switch-client -c /dev/ttys<nn> -t '...'
+```
+
+### Wrong wezterm window takes the tmux switch
+
+Before the client-tty fix, calling `tmux switch-client` without `-c`
+picked an arbitrary attached client, so a WezTerm window you weren't
+thinking about could have its tmux session switched out from under it.
+The helper now passes `-c <client_tty>` so exactly the resolved client
+is switched. If you see this regress, enable `OPENCODE_FOCUS_DEBUG` and
+check for the `-c` flag in the `switch-client` invocation.
 
 ### Manual test of the helper
 
