@@ -5,9 +5,14 @@ OpenCode plugin that plays sounds and sends system notifications when permission
 > **Fork note (feat/tmux-click-focus branch):** this checkout adds
 > click-to-focus for tmux + WezTerm on macOS (clicking a notification
 > switches tmux to the pane opencode was launched in) and a waiting
-> indicator for the hosting tmux window. See
-> [docs/tmux-wezterm.md](docs/tmux-wezterm.md) for usage + tmux.conf
-> snippet + troubleshooting.
+> indicator for the hosting tmux window.
+>
+> - User-facing usage, config, and tmux.conf snippet:
+>   [docs/tmux-wezterm.md](docs/tmux-wezterm.md).
+> - Development workflow (shim, iteration loop, smoke tests,
+>   debugging, remotes, upstream PR): [DEVELOPMENT.md](DEVELOPMENT.md).
+> - Background research + full planning notes:
+>   [docs/dev-notes/](docs/dev-notes/).
 
 ## Quick Start
 
