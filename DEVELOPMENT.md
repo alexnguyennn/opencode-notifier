@@ -167,9 +167,16 @@ Waiting indicator:
 binaries itself. To debug:
 
 ```bash
-# Run through bash -x and redirect trace to a file:
+# Run through bash -x and redirect trace to a file. Either use bash -x
+# directly (catches a crash before the script even starts) or set the
+# OPENCODE_FOCUS_DEBUG env var to a log path (script self-enables -x):
 terminal-notifier -title opencode -message test \
     -execute "/bin/bash -x $PWD/scripts/opencode-focus-tmux.sh '$0:@1.%1' WezTerm '$WEZTERM_PANE' 2>>/tmp/opencode-focus.log"
+
+# Or (preferred - works inside opencode too since terminal-notifier
+# inherits env from the opencode process):
+OPENCODE_FOCUS_DEBUG=/tmp/opencode-focus.log \
+    $PWD/scripts/opencode-focus-tmux.sh '$0:@1.%1' WezTerm '$WEZTERM_PANE'
 
 tail -f /tmp/opencode-focus.log
 # now click the notification
@@ -180,9 +187,19 @@ Common failures:
 - **Click opens Script Editor** — `terminal-notifier` not on PATH at
   opencode-start time, so plugin fell back to `osascript display
   notification`. Install it and restart opencode.
-- **Wrong pane focused** — context captured while you were in a
-  different pane. Plugin captures once at init; restart opencode from
-  inside the target pane.
+- **Wrong wezterm window takes the tmux switch** — happens when you
+  have multiple WezTerm panes with tmux clients attached to different
+  sessions. The helper resolves this at click time by querying
+  `tmux list-clients -t <session>` for the LIVE client tty, matching
+  it against `wezterm cli list` to find the pane, and passing
+  `switch-client -c <tty>` to tmux so exactly that client is switched
+  (not an arbitrarily-chosen one). If the resolution fails (e.g. tmux
+  session not currently attached), falls back to the captured initial
+  `WEZTERM_PANE` from plugin init.
+- **Wrong pane focused** — if the above resolution fails entirely,
+  context captured at plugin init is used. That's stale if you started
+  opencode outside tmux and later attached from tmux. Restart opencode
+  inside the target pane to re-capture.
 - **WezTerm window raises but wrong pane** — `WEZTERM_PANE` wasn't set.
   Check `echo $WEZTERM_PANE` in the opencode-hosting pane.
 - **tmux errors silently** — `tmux switch-client` fails without an
