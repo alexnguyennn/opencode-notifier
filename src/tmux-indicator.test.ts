@@ -76,4 +76,27 @@ describe("setIndicator", () => {
       setIndicator(ctx, "waiting", "window-option")
     }).not.toThrow()
   })
+
+  test("auto backend with ctx runs without throwing (layered write)", () => {
+    // `auto` always writes @opencode_waiting AND also calls workmux if on
+    // PATH. Both paths are best-effort shelled-out writes; just verify no
+    // throw and that state tracking advances.
+    const ctx = makeCtx()
+    expect(() => {
+      setIndicator(ctx, "waiting", "auto")
+      setIndicator(ctx, "working", "auto")
+      setIndicator(ctx, "done", "auto")
+      setIndicator(ctx, null, "auto")
+    }).not.toThrow()
+  })
+
+  test("auto backend with empty windowId still attempts workmux but skips window-option", () => {
+    // Outside tmux but with a WezTerm pane context -> windowId is "". The
+    // window-option write should be a no-op (nothing to target) while the
+    // workmux call (if any) is still best-effort. Should never throw.
+    const ctx = makeCtx({ windowId: "", target: "" })
+    expect(() => {
+      setIndicator(ctx, "waiting", "auto")
+    }).not.toThrow()
+  })
 })
