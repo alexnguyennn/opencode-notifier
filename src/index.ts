@@ -21,6 +21,8 @@ import { ringBell } from "./bell"
 import { runCommand } from "./command"
 import { isTerminalFocused, focusTerminal, captureStartupWindowId, isKDEJumpBackSupported } from "./focus"
 import { shouldSuppressPermissionAlert, prunePermissionAlertState } from "./permission-dedupe"
+import { captureTmuxContext, type TmuxContext } from "./tmux-context"
+import { setIndicator } from "./tmux-indicator"
 
 const IDLE_COMPLETE_DELAY_MS = 350
 
@@ -167,7 +169,8 @@ async function handleEvent(
   elapsedSeconds?: number | null,
   sessionTitle?: string | null,
   sessionID?: string | null,
-  agentName?: string | null
+  agentName?: string | null,
+  tmuxContext?: TmuxContext | null
 ): Promise<void> {
   if (config.suppressWhenFocused && isTerminalFocused()) {
     return
@@ -201,7 +204,25 @@ async function handleEvent(
     const title = getNotificationTitle(config, projectName)
     const iconPath = getIconPath(config)
     const onNotificationClick = isKDEJumpBackSupported() ? () => void focusTerminal() : undefined
-    promises.push(sendNotification(title, message, config.timeout, iconPath, config.notificationSystem, config.linux.grouping, onNotificationClick, config.windows.appID))
+    const clickCtx = config.tmux.clickToFocus ? tmuxContext ?? null : null
+    const groupId = sessionID ? `opencode-${sessionID}` : tmuxContext?.sessionId ? `opencode-${tmuxContext.sessionId}` : null
+    promises.push(
+      sendNotification(
+        title,
+        message,
+        config.timeout,
+        iconPath,
+        config.notificationSystem,
+        config.linux.grouping,
+        {
+          tmuxContext: clickCtx,
+          macNotifier: config.macNotifier,
+          groupId,
+          onClick: onNotificationClick,
+          windowsAppID: config.windows.appID,
+        }
+      )
+    )
   }
 
   if (isEventSoundEnabled(config, eventType)) {
@@ -416,7 +437,8 @@ async function processSessionIdle(
   event: unknown,
   sessionID: string,
   sequence: number,
-  idleReceivedAtMs: number
+  idleReceivedAtMs: number,
+  tmuxContext: TmuxContext | null
 ): Promise<void> {
   if (!hasCurrentSessionIdleSequence(sessionID, sequence)) {
     return
@@ -429,7 +451,7 @@ async function processSessionIdle(
   // Fast path: if we already know this is a subagent from in-memory tracking,
   // skip the API call and go straight to subagent_complete
   if (subagentSessionIds.has(sessionID)) {
-    await handleEventWithElapsedTime(client, config, "subagent_complete", projectName, event, idleReceivedAtMs, null)
+    await handleEventWithElapsedTime(client, config, "subagent_complete", projectName, event, idleReceivedAtMs, null, tmuxContext)
     return
   }
 
@@ -444,13 +466,13 @@ async function processSessionIdle(
   }
 
   if (!sessionInfo.isChild) {
-    await handleEventWithElapsedTime(client, config, "complete", projectName, event, idleReceivedAtMs, sessionInfo.title)
+    await handleEventWithElapsedTime(client, config, "complete", projectName, event, idleReceivedAtMs, sessionInfo.title, tmuxContext)
     return
   }
 
   // Update in-memory set now that we confirmed it's a child via API
   subagentSessionIds.add(sessionID)
-  await handleEventWithElapsedTime(client, config, "subagent_complete", projectName, event, idleReceivedAtMs, sessionInfo.title)
+  await handleEventWithElapsedTime(client, config, "subagent_complete", projectName, event, idleReceivedAtMs, sessionInfo.title, tmuxContext)
 }
 
 function scheduleSessionIdle(
@@ -458,7 +480,8 @@ function scheduleSessionIdle(
   config: NotifierConfig,
   projectName: string | null,
   event: unknown,
-  sessionID: string
+  sessionID: string,
+  tmuxContext: TmuxContext | null
 ): void {
   clearPendingIdleTimer(sessionID)
   const sequence = bumpSessionIdleSequence(sessionID)
@@ -466,7 +489,7 @@ function scheduleSessionIdle(
 
   const timer = setTimeout(() => {
     pendingIdleTimers.delete(sessionID)
-    void processSessionIdle(client, config, projectName, event, sessionID, sequence, idleReceivedAtMs).catch(() => undefined)
+    void processSessionIdle(client, config, projectName, event, sessionID, sequence, idleReceivedAtMs, tmuxContext).catch(() => undefined)
   }, IDLE_COMPLETE_DELAY_MS)
 
   pendingIdleTimers.set(sessionID, timer)
@@ -479,7 +502,8 @@ async function handleEventWithElapsedTime(
   projectName: string | null,
   event: unknown,
   elapsedReferenceNowMs?: number,
-  preloadedSessionTitle?: string | null
+  preloadedSessionTitle?: string | null,
+  tmuxContext?: TmuxContext | null
 ): Promise<void> {
   const sessionID = getSessionIDFromEvent(event)
   const commandMinDuration = config.command?.minDuration
@@ -514,7 +538,7 @@ async function handleEventWithElapsedTime(
 
   const agentName = extractAgentNameFromSessionTitle(sessionTitle)
 
-  await handleEvent(config, eventType, projectName, elapsedSeconds, sessionTitle, sessionID, agentName)
+  await handleEvent(config, eventType, projectName, elapsedSeconds, sessionTitle, sessionID, agentName, tmuxContext ?? null)
 }
 
 export const NotifierPlugin: Plugin = async ({ client, directory }) => {
@@ -529,6 +553,10 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
   const getConfig = () => loadConfig()
   const projectName = directory ? (getConfig().showFullPath ? directory : basename(directory)) : null
 
+  // Capture tmux + host-terminal context ONCE. Must happen at plugin init;
+  // later lookups would be confused by a moved tmux client.
+  const tmuxContext: TmuxContext | null = captureTmuxContext()
+
   // Fire client_connected after the plugin is fully initialized.
   // There is no SDK event that reliably signals client connection from a plugin's
   // perspective, so we approximate it with a short delay after plugin startup.
@@ -536,11 +564,16 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
   // CLI sessions skip the delay since the process may exit before it fires.
   const isCLI = isCLIClient(clientEnv)
   if (isCLI) {
-    void handleEvent(getConfig(), "client_connected", projectName, null)
+    void handleEvent(getConfig(), "client_connected", projectName, null, null, null, null, tmuxContext)
   } else {
     setTimeout(() => {
-      void handleEvent(getConfig(), "client_connected", projectName, null)
+      void handleEvent(getConfig(), "client_connected", projectName, null, null, null, null, tmuxContext)
     }, 100)
+  }
+
+  // Indicator helper — backends chosen by config.tmux.indicator.
+  const setInd = (state: "waiting" | "working" | "done" | null) => {
+    setIndicator(tmuxContext, state, getConfig().tmux.indicator)
   }
 
   return {
@@ -554,7 +587,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
           subagentSessionIds.add(info.id)
         } else {
           // Non-subagent session started
-          await handleEvent(config, "session_started", projectName, null, info.title, info.id, null)
+          await handleEvent(config, "session_started", projectName, null, info.title, info.id, null, tmuxContext)
         }
       }
 
@@ -585,12 +618,19 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
         // Claim the shared dedupe window only when a notification is actually
         // about to fire: a silently skipped auto-approved request must not mute a
         // real one arriving within the same second.
+        setInd("waiting")
         if (stillPending && !shouldSuppressPermissionAlert(sessionID)) {
-          await handleEventWithElapsedTime(client, config, "permission", projectName, event)
+          await handleEventWithElapsedTime(client, config, "permission", projectName, event, undefined, undefined, tmuxContext)
         }
       }
 
+      if ((event as any).type === "permission.replied") {
+        // User answered the permission prompt -> opencode is working again.
+        setInd("working")
+      }
+
       if (event.type === "session.idle") {
+        setInd("waiting")
         const sessionID = getSessionIDFromEvent(event)
         if (sessionID) {
           if (isCLI) {
@@ -599,55 +639,62 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
             // when the process terminates before the debounce timer fires.
             const idleReceivedAtMs = Date.now()
             const sequence = bumpSessionIdleSequence(sessionID)
-            await processSessionIdle(client, config, projectName, event, sessionID, sequence, idleReceivedAtMs)
+            await processSessionIdle(client, config, projectName, event, sessionID, sequence, idleReceivedAtMs, tmuxContext)
           } else {
-            scheduleSessionIdle(client, config, projectName, event, sessionID)
+            scheduleSessionIdle(client, config, projectName, event, sessionID, tmuxContext)
           }
         } else {
-          await handleEventWithElapsedTime(client, config, "complete", projectName, event)
+          await handleEventWithElapsedTime(client, config, "complete", projectName, event, undefined, undefined, tmuxContext)
         }
       }
 
       if (event.type === "session.status" && event.properties.status.type === "busy") {
         markSessionBusy(event.properties.sessionID)
+        setInd("working")
       }
 
       if (event.type === "session.error") {
         const sessionID = getSessionIDFromEvent(event)
         markSessionError(sessionID)
+        setInd("waiting")
         const eventType: EventType = event.properties.error?.name === "MessageAbortedError" ? "user_cancelled" : "error"
         let sessionTitle: string | null = null
         if (sessionID && config.showSessionTitle) {
           const info = await getSessionInfo(client, sessionID)
           sessionTitle = info.title
         }
-        await handleEventWithElapsedTime(client, config, eventType, projectName, event, undefined, sessionTitle)
+        await handleEventWithElapsedTime(client, config, eventType, projectName, event, undefined, sessionTitle, tmuxContext)
       }
 
       if (event.type === "message.updated") {
         const info = getMessageUpdatedInfo(event)
         if (info.role === "user") {
           const sessionID = info.sessionID
+          // User just sent a message -> clear waiting indicator; opencode is working.
+          setInd("working")
           // Only fire for non-subagent sessions
           if (!sessionID || !subagentSessionIds.has(sessionID)) {
-            await handleEvent(config, "user_message", projectName, null, null, sessionID, null)
+            await handleEvent(config, "user_message", projectName, null, null, sessionID, null, tmuxContext)
           }
         }
       }
     },
     "permission.ask": async () => {
       const config = getConfig()
+      setInd("waiting")
       if (!shouldSuppressPermissionAlert(null)) {
-        await handleEvent(config, "permission", projectName, null)
+        await handleEvent(config, "permission", projectName, null, null, null, null, tmuxContext)
       }
     },
     "tool.execute.before": async (input) => {
       const config = getConfig()
       if (input.tool === "question") {
-        await handleEvent(config, "question", projectName, null)
+        setInd("waiting")
+        await handleEvent(config, "question", projectName, null, null, null, null, tmuxContext)
       }
       if (input.tool === "plan_exit") {
-        await handleEvent(config, "plan_exit", projectName, null)
+        setInd("waiting")
+        await handleEvent(config, "plan_exit", projectName, null, null, null, null, tmuxContext)
       }
     },
   }
