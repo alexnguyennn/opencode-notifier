@@ -46,4 +46,20 @@ describe("isPermissionStillPending", () => {
     await expect(isPermissionStillPending(client, "per_3")).resolves.toBe(true)
     await expect(isPermissionStillPending(client, "per_other")).resolves.toBe(false)
   })
+
+  test("uses the V2 session-scoped permission API when available", async () => {
+    const calls: string[] = []
+    const client = {
+      permission: {
+        list: async ({ sessionID }: { sessionID: string }) => {
+          calls.push(sessionID)
+          return { data: [{ id: "per_v2" }] }
+        },
+      },
+    }
+
+    await expect(isPermissionStillPending(client, "per_v2", "ses_v2")).resolves.toBe(true)
+    await expect(isPermissionStillPending(client, "per_other", "ses_v2")).resolves.toBe(false)
+    expect(calls).toEqual(["ses_v2", "ses_v2"])
+  })
 })

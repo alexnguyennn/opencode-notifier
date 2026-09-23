@@ -277,8 +277,25 @@ export const PERMISSION_PENDING_GRACE_MS = 300
 
 // True when the request is still awaiting approval. Fails open: any lookup
 // failure means "unknown", and unknown must notify rather than stay silent.
-export async function isPermissionStillPending(client: unknown, permissionID: string): Promise<boolean> {
+export async function isPermissionStillPending(
+  client: unknown,
+  permissionID: string,
+  sessionID?: string | null
+): Promise<boolean> {
   try {
+    const permissionList = (client as any)?.permission?.list
+    if (sessionID && typeof permissionList === "function") {
+      const listResponse = await permissionList({ sessionID })
+      const pendingList = Array.isArray(listResponse)
+        ? listResponse
+        : Array.isArray(listResponse?.data)
+          ? listResponse.data
+          : null
+      if (pendingList) {
+        return pendingList.some((permission: { id?: string }) => permission?.id === permissionID)
+      }
+    }
+
     // The v1 SDK client type exposes no permission.list API, so go through
     // the raw HTTP client like the rest of this file goes through (event as any).
     const inner = (client as any)?._client || (client as any)?.session?._client
@@ -613,7 +630,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
           // Auto-approved requests are resolved immediately, so wait briefly
           // and only notify when the request is still pending.
           await new Promise((resolve) => setTimeout(resolve, PERMISSION_PENDING_GRACE_MS))
-          stillPending = await isPermissionStillPending(client, permissionID)
+          stillPending = await isPermissionStillPending(client, permissionID, sessionID)
         }
         // Claim the shared dedupe window only when a notification is actually
         // about to fire: a silently skipped auto-approved request must not mute a

@@ -22,7 +22,9 @@
     "logos"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node --external node-notifier",
+    "build": "bun run build:v1 && bun run build:v2",
+    "build:v1": "bun build src/index.ts --outdir dist --target node --external node-notifier",
+    "build:v2": "bun build src/v2.ts --outfile dist/v2.js --target node --external node-notifier",
     "prepublishOnly": "bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
@@ -39,6 +41,7 @@
     "node-notifier": "^10.0.1"
   },
   "devDependencies": {
+    "@opencode/plugin": "2.0.14",
     "@opencode-ai/plugin": "^1.18.25",
     "@types/node": "^22.0.0",
     "@types/node-notifier": "^8.0.5",

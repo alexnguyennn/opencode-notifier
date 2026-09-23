@@ -26,43 +26,52 @@ Quick architecture recap:
 - `src/config.ts` — `macNotifier` + `tmux.{clickToFocus,indicator}` keys.
 - `src/index.ts` — captures tmux context at init, threads it through
   `handleEvent`, drives the indicator on session lifecycle events.
+- `src/v2.ts` — adapts OpenCode V2 events and APIs to the existing notifier
+  behavior without changing the published V1 entrypoint.
 
 ## Build, typecheck, test
 
 ```bash
-bun install
-bun run build        # → dist/index.js
-bun run typecheck    # tsc --noEmit
-bun test             # 74/74 at time of writing
+mise x bun@1.3.13 -- bun install
+mise x bun@1.3.13 -- bun run build      # → dist/index.js (V1) + dist/v2.js (V2)
+mise x bun@1.3.13 -- bun run typecheck  # tsc --noEmit
+mise x bun@1.3.13 -- bun test
 ```
 
-`bun run build` is what the shim (see below) consumes via `dist/index.js`.
+`mise x bun@1.3.13 -- bun run build` is what the shims below consume.
 **Re-run it after every edit** or opencode will keep loading the old build.
 
 ## Run the local build from opencode (iteration loop)
 
 There are two ways to point opencode at this checkout instead of the
 published `@mohak34/opencode-notifier` npm package. Both survive
-restarts; both require `bun run build` after every source edit.
+restarts; both require `mise x bun@1.3.13 -- bun run build` after every
+source edit.
 
 ### Option A — local plugin shim (recommended for active dev)
 
-Create `~/.config/opencode/plugins/opencode-notifier.ts` that re-exports
-the built module:
+For OpenCode V2, create `~/.config/opencode/plugin/opencode-notifier.ts`
+(singular `plugin`) with a native V2 definition that lazily loads the bundle:
 
 ```ts
-// ~/.config/opencode/plugins/opencode-notifier.ts
-// @ts-ignore — path import into a sibling checkout
-import NotifierPlugin from '/ABSOLUTE/PATH/TO/opencode-notifier/dist/index.js';
-
-export { NotifierPlugin };
-export default NotifierPlugin;
+// ~/.config/opencode/plugin/opencode-notifier.ts
+export default {
+  id: 'opencode-notifier',
+  async setup(context: unknown) {
+    const { default: notifier } = await import(
+      '/ABSOLUTE/PATH/TO/opencode-notifier/dist/v2.js'
+    );
+    return notifier.setup(context as never);
+  },
+};
 ```
+
+For OpenCode V1, use the same pattern under the legacy `plugins/` directory
+and import `dist/index.js` as the default export instead.
 
 Then in `~/.config/opencode/opencode.json` (or `.jsonc`) comment out or
 remove the npm entry for `@mohak34/opencode-notifier@<version>`. OpenCode
-auto-loads every `.ts` / `.js` file under `~/.config/opencode/plugins/`
-at startup, so no other config is needed.
+auto-loads local plugin files at startup, so no other config is needed.
 
 Why this form: matches the pattern used for other in-flight plugin forks,
 keeps the fork wholly under `~/bench/dev/…`, and doesn't touch
@@ -95,7 +104,7 @@ resolution path. Shim is less ceremonious, so prefer A during dev.
 
 ```bash
 # terminal 1 — the fork
-bun run build
+mise x bun@1.3.13 -- bun run build
 
 # terminal 2 — opencode
 #   (exit the TUI and reopen; there is no hot-reload)
@@ -107,7 +116,7 @@ notification to test.
 
 ## Tests you'll actually need
 
-- `bun test` in the repo root. Covers config parsing, focus detection,
+- `mise x bun@1.3.13 -- bun test` in the repo root. Covers config parsing, focus detection,
   permission dedupe, `deriveMacAppName`, indicator idempotence, and
   `resolveMacBackend`.
 - The in-tmux path of `captureTmuxContext` isn't unit-tested (needs a
@@ -237,7 +246,8 @@ gh pr create \
 
 Disable the fork and go back to the published npm version:
 
-1. Delete / rename `~/.config/opencode/plugins/opencode-notifier.ts`.
+1. Delete / rename `~/.config/opencode/plugin/opencode-notifier.ts` (V2) or
+   `~/.config/opencode/plugins/opencode-notifier.ts` (V1).
 2. Re-enable the `@mohak34/opencode-notifier@<version>` entry in
    `~/.config/opencode/opencode.json`.
 3. Restart opencode.
