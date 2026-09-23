@@ -44,7 +44,7 @@ export type TmuxIndicatorBackend = "auto" | "workmux" | "window-option" | "off"
 export interface TmuxConfig {
   /** Click the notification to focus the tmux session opencode was launched in. macOS only. */
   clickToFocus: boolean
-  /** Waiting-indicator backend. `auto` = workmux if on PATH, else @opencode_waiting window option. */
+  /** Waiting-indicator backend. `auto` writes @opencode_waiting and also calls workmux when available. */
   indicator: TmuxIndicatorBackend
 }
 

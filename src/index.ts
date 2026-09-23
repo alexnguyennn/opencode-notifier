@@ -618,9 +618,11 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
         // Claim the shared dedupe window only when a notification is actually
         // about to fire: a silently skipped auto-approved request must not mute a
         // real one arriving within the same second.
-        setInd("waiting")
-        if (stillPending && !shouldSuppressPermissionAlert(sessionID)) {
-          await handleEventWithElapsedTime(client, config, "permission", projectName, event, undefined, undefined, tmuxContext)
+        if (stillPending) {
+          setInd("waiting")
+          if (!shouldSuppressPermissionAlert(sessionID)) {
+            await handleEventWithElapsedTime(client, config, "permission", projectName, event, undefined, undefined, tmuxContext)
+          }
         }
       }
 
