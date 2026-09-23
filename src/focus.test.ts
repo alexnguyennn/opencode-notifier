@@ -327,7 +327,16 @@ describe("resolveQdbusBinary", () => {
 
 describe("focusTerminal", () => {
   test("does not throw on unsupported platforms", async () => {
-    await expect(focusTerminal()).resolves.toBeUndefined()
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")
+    Object.defineProperty(process, "platform", { value: "freebsd" })
+
+    try {
+      await expect(focusTerminal()).resolves.toBeUndefined()
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform)
+      }
+    }
   })
 })
 
