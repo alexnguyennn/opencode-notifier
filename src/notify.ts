@@ -29,6 +29,7 @@ const LINUX_FOCUS_ACTION_KEY = "focus-terminal"
 const LINUX_FOCUS_ACTION_LABEL = "Jump to terminal"
 
 const lastNotificationTime: Record<string, number> = {}
+let notificationsSincePrune = 0
 
 let lastLinuxNotificationId: number | null = null
 let linuxNotifySendSupportsReplace: boolean | null = null
@@ -297,6 +298,8 @@ export interface SendNotificationOptions {
   macNotifier?: MacNotifier
   /** Group id for collapsing stale notifications (terminal-notifier `-group`). */
   groupId?: string | null
+  /** Stable event identity: unrelated same-message sessions must not debounce each other. */
+  dedupeKey?: string
   /** Linux notification action and fallback node-notifier click callback. */
   onClick?: () => void
   /** Windows application id passed to node-notifier. */
@@ -312,10 +315,17 @@ export async function sendNotification(
   options: SendNotificationOptions = {}
 ): Promise<void> {
   const now = Date.now()
-  if (lastNotificationTime[message] && now - lastNotificationTime[message] < DEBOUNCE_MS) {
+  const dedupeKey = options.dedupeKey ?? (options.groupId ? `${options.groupId}\x1f${message}` : message)
+  if (lastNotificationTime[dedupeKey] && now - lastNotificationTime[dedupeKey] < DEBOUNCE_MS) {
     return
   }
-  lastNotificationTime[message] = now
+  lastNotificationTime[dedupeKey] = now
+  if (++notificationsSincePrune >= 256) {
+    notificationsSincePrune = 0
+    for (const [key, time] of Object.entries(lastNotificationTime)) {
+      if (now - time >= DEBOUNCE_MS) delete lastNotificationTime[key]
+    }
+  }
 
   if (notificationSystem === "ghostty") {
     return new Promise((resolve) => {
@@ -353,7 +363,7 @@ export async function sendNotification(
             // single-quote args. Escape any embedded single quotes.
             const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
             const ctx = options.tmuxContext
-            const executeCmd = `${sq(script)} ${sq(ctx.target)} ${sq(ctx.appName ?? "")} ${sq(ctx.weztermPaneId ?? "")}`
+            const executeCmd = `${sq(script)} ${sq(ctx.target)} ${sq(ctx.appName ?? "")} ${sq(ctx.weztermPaneId ?? "")} ${sq(ctx.socketPath ?? "")}`
             args.push("-execute", executeCmd)
           }
           execFile(tn, args, { timeout: 5000 }, () => resolve())

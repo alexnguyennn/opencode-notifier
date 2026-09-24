@@ -20,20 +20,20 @@ Quick architecture recap:
   `window-option`, `off`). `auto` picks workmux when on PATH.
 - `src/notify.ts` — new `resolveMacBackend()` + `terminal-notifier -execute`
   dispatch path that wraps `scripts/opencode-focus-tmux.sh`.
-- `scripts/opencode-focus-tmux.sh` — on-click helper. Runs `wezterm cli
-  activate-pane` → `tmux switch-client` → `osascript activate`, each step
-  fire-and-forget.
+- `scripts/opencode-focus-tmux.sh` — on-click helper. Resolves the live
+  WezTerm tab/pane and tmux client from the registered socket, activates
+  the tab/pane and exact tmux target, then raises WezTerm.
 - `src/config.ts` — `macNotifier` + `tmux.{clickToFocus,indicator}` keys.
 - `src/index.ts` — captures tmux context at init, threads it through
   `handleEvent`, drives the indicator on session lifecycle events.
-- `src/v2.ts` — adapts OpenCode V2 events and APIs to the existing notifier
-  behavior without changing the published V1 entrypoint.
+- `src/v2.ts` and `src/v2-tui.ts` — adapt OpenCode V2 events and register
+  the visible session's pane without changing the published V1 entrypoint.
 
 ## Build, typecheck, test
 
 ```bash
 mise x bun@1.3.13 -- bun install
-mise x bun@1.3.13 -- bun run build      # → dist/index.js (V1) + dist/v2.js (V2)
+mise x bun@1.3.13 -- bun run build      # → dist/index.js, dist/v2.js, dist/v2-tui.js
 mise x bun@1.3.13 -- bun run typecheck  # tsc --noEmit
 mise x bun@1.3.13 -- bun test
 ```
@@ -115,6 +115,29 @@ If you edit only `scripts/opencode-focus-tmux.sh`, no rebuild is needed
 notification to test.
 
 ## Tests you'll actually need
+
+### V2 session-to-pane notifications (2026-09-24)
+
+The server bundle (`dist/v2.js`) listens for durable `session.execution.succeeded` events and sends one completion per event, grouped by **session ID**. `session.idle` is ignored for V2 to prevent double alerts. The separate TUI bundle (`dist/v2-tui.js`) registers its inherited, validated tmux pane and currently visible root session via the `opencode-notifier-pane` RPC; leases expire after four seconds and refresh every second. With duplicate viewers the most recently registered/activated one wins, and routine lease refreshes do not change that ordering. The server validates the pane/socket again at notification time. Session-scoped question, permission, plan-review, error and other V2 alerts resolve the same pane (following parent sessions for subagents). No valid viewer means a session-unique notification without a click target; it never guesses from the server's ambient tmux environment.
+
+The V2 setup registers a `session.prompt` hook before returning. The SSE feed can only connect after setup returns, so on its `server.connected` handshake it checks prompts observed during that gap and catches up successful completions. A first fast `opencode run` on a cold location otherwise can finish before the feed subscribes; a subsequent run already on that location does notify. Never await `server.connected` inside setup: that deadlocks activation in OpenCode 2.0.14.
+
+The V2 event SSE is global, even though each server plugin instance belongs to one location. Events must be matched to their payload/session location before processing. Without that filter, an unrelated location can win the event-ID debounce and label a stop alert with the wrong project (and a null or wrong pane). V2's legacy hook adapter is explicitly given no ambient tmux context; only the registered TUI owner can add a click target to a completion alert.
+
+The pane RPC route is also global: updates can land on `/Users/alex` while completion events are handled by another location. OpenCode loads separate copies of the V2 bundle for those locations, so a module-level registry is insufficient; `globalThis.__opencodeNotifierV2Panes` shares leases between copies in the server process. The tool hook must filter its session's location just like SSE events, or question alerts can be emitted under the wrong project. Already-delivered alerts cannot acquire a click action retroactively, and a server restart requires reopening each TUI to restore registrations.
+
+The focus helper clears a stale `WEZTERM_UNIX_SOCKET`, maps the registered tmux client's tty to a live WezTerm pane **and tab**, activates both, selects the exact tmux window/pane, then raises the terminal. `activate-pane` alone leaves another WezTerm tab visible. The active Hammerspoon notification picker now leaves Notification Center closure to a successful notification action, rather than sending Escape shortly after activation.
+
+The active profile loads `plugin/opencode-notifier.ts` for the server and `plugins/opencode-notifier-pane/tui.ts` for the TUI. Build all three bundles with `mise x bun@1.3.13 -- bun run build`, then restart the shared service and each TUI to load both entrypoints. For another installation, provide both a V2 server entrypoint loading `dist/v2.js` and a V2 TUI entrypoint loading `dist/v2-tui.js`.
+
+Live smoke matrix (after restarting; keep the server shared):
+
+1. Start two tmux/WezTerm TUIs in the **same folder**, each showing a different root session. Submit a prompt to both. Each completion should create its own notification, even if the messages and completion times coincide; click/Enter on each should activate that session's WezTerm/tmux pane.
+2. Open the same root session in both panes. A completion should create one notification; its click target should be the most recently registered viewer. Switch a pane to another session and repeat to confirm the former session no longer routes there.
+3. Complete a server-created session with no TUI viewer. It should still notify with no focus action. Close a TUI or wait over four seconds after disconnect and repeat to check lease expiry.
+4. Repeat with a non-default tmux socket (`tmux -L ...`) to confirm the click helper passes the registered socket to tmux.
+
+Progress board: delivery and cross-location focus bridge implemented; same-folder two-session delivery and isolated-socket completion click verified through native Notification Center and the Hammerspoon picker. A fresh question alert in the user's reopened TUI focused its exact pane (`%110`) through the picker. Question/plan/permission/error resolver and subagent-parent tests pass. A fresh permission click and two-TUI same-session viewer-switch smoke remain available as follow-up checks; reopen TUIs after any server restart to restore leases.
 
 - `mise x bun@1.3.13 -- bun test` in the repo root. Covers config parsing, focus detection,
   permission dedupe, `deriveMacAppName`, indicator idempotence, and

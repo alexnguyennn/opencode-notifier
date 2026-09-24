@@ -170,9 +170,10 @@ async function handleEvent(
   sessionTitle?: string | null,
   sessionID?: string | null,
   agentName?: string | null,
-  tmuxContext?: TmuxContext | null
+  tmuxContext?: TmuxContext | null,
+  options?: { skipFocusSuppression?: boolean; notificationDedupeKey?: string; disableFallbackClick?: boolean }
 ): Promise<void> {
-  if (config.suppressWhenFocused && isTerminalFocused()) {
+  if (!options?.skipFocusSuppression && config.suppressWhenFocused && isTerminalFocused()) {
     return
   }
 
@@ -203,7 +204,7 @@ async function handleEvent(
   if (notificationEnabled) {
     const title = getNotificationTitle(config, projectName)
     const iconPath = getIconPath(config)
-    const onNotificationClick = isKDEJumpBackSupported() ? () => void focusTerminal() : undefined
+    const onNotificationClick = !options?.disableFallbackClick && isKDEJumpBackSupported() ? () => void focusTerminal() : undefined
     const clickCtx = config.tmux.clickToFocus ? tmuxContext ?? null : null
     const groupId = sessionID ? `opencode-${sessionID}` : tmuxContext?.sessionId ? `opencode-${tmuxContext.sessionId}` : null
     promises.push(
@@ -218,6 +219,7 @@ async function handleEvent(
           tmuxContext: clickCtx,
           macNotifier: config.macNotifier,
           groupId,
+          dedupeKey: options?.notificationDedupeKey,
           onClick: onNotificationClick,
           windowsAppID: config.windows.appID,
         }
@@ -520,7 +522,8 @@ async function handleEventWithElapsedTime(
   event: unknown,
   elapsedReferenceNowMs?: number,
   preloadedSessionTitle?: string | null,
-  tmuxContext?: TmuxContext | null
+  tmuxContext?: TmuxContext | null,
+  options?: { skipFocusSuppression?: boolean; notificationDedupeKey?: string; disableFallbackClick?: boolean }
 ): Promise<void> {
   const sessionID = getSessionIDFromEvent(event)
   const commandMinDuration = config.command?.minDuration
@@ -555,10 +558,51 @@ async function handleEventWithElapsedTime(
 
   const agentName = extractAgentNameFromSessionTitle(sessionTitle)
 
-  await handleEvent(config, eventType, projectName, elapsedSeconds, sessionTitle, sessionID, agentName, tmuxContext ?? null)
+  await handleEvent(config, eventType, projectName, elapsedSeconds, sessionTitle, sessionID, agentName, tmuxContext ?? null, options)
 }
 
-export const NotifierPlugin: Plugin = async ({ client, directory }) => {
+/** Server-mode V2 completion: the event owns the session identity and the TUI supplies the pane. */
+export async function notifyV2Completion(
+  client: PluginInput["client"],
+  directory: string,
+  sessionID: string,
+  eventID: string,
+  tmuxContext: TmuxContext | null
+): Promise<void> {
+  const config = loadConfig()
+  const projectName = directory ? (config.showFullPath ? directory : basename(directory)) : null
+  const info = await getSessionInfo(client, sessionID)
+  const event = { type: "session.execution.succeeded", properties: { sessionID } }
+  await handleEventWithElapsedTime(
+    client,
+    config,
+    info.isChild ? "subagent_complete" : "complete",
+    projectName,
+    event,
+    Date.now(),
+    info.title,
+    tmuxContext,
+    { skipFocusSuppression: true, notificationDedupeKey: eventID, disableFallbackClick: !tmuxContext }
+  )
+}
+
+export const NotifierPlugin: Plugin = async (input) => createNotifierHooks(input, captureTmuxContext())
+
+/** V2 runs in a shared server: never infer a click target from its process environment. */
+export const NotifierV2Hooks: Plugin = async (input) => createNotifierV2Hooks(input)
+
+export function createNotifierV2Hooks(
+  input: PluginInput,
+  resolveContext?: (sessionID: string | null) => Promise<TmuxContext | null>
+): Promise<Awaited<ReturnType<Plugin>>> {
+  return createNotifierHooks(input, null, resolveContext)
+}
+
+async function createNotifierHooks(
+  { client, directory }: PluginInput,
+  tmuxContext: TmuxContext | null,
+  resolveContext?: (sessionID: string | null) => Promise<TmuxContext | null>
+): Promise<Awaited<ReturnType<Plugin>>> {
   captureStartupWindowId()
 
   const clientEnv = process.env.OPENCODE_CLIENT
@@ -569,10 +613,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
 
   const getConfig = () => loadConfig()
   const projectName = directory ? (getConfig().showFullPath ? directory : basename(directory)) : null
-
-  // Capture tmux + host-terminal context ONCE. Must happen at plugin init;
-  // later lookups would be confused by a moved tmux client.
-  const tmuxContext: TmuxContext | null = captureTmuxContext()
+  const contextFor = (sessionID: string | null) => resolveContext ? resolveContext(sessionID) : Promise.resolve(tmuxContext)
 
   // Fire client_connected after the plugin is fully initialized.
   // There is no SDK event that reliably signals client connection from a plugin's
@@ -604,7 +645,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
           subagentSessionIds.add(info.id)
         } else {
           // Non-subagent session started
-          await handleEvent(config, "session_started", projectName, null, info.title, info.id, null, tmuxContext)
+          await handleEvent(config, "session_started", projectName, null, info.title, info.id, null, await contextFor(info.id))
         }
       }
 
@@ -638,7 +679,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
         if (stillPending) {
           setInd("waiting")
           if (!shouldSuppressPermissionAlert(sessionID)) {
-            await handleEventWithElapsedTime(client, config, "permission", projectName, event, undefined, undefined, tmuxContext)
+            await handleEventWithElapsedTime(client, config, "permission", projectName, event, undefined, undefined, await contextFor(sessionID))
           }
         }
       }
@@ -682,7 +723,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
           const info = await getSessionInfo(client, sessionID)
           sessionTitle = info.title
         }
-        await handleEventWithElapsedTime(client, config, eventType, projectName, event, undefined, sessionTitle, tmuxContext)
+        await handleEventWithElapsedTime(client, config, eventType, projectName, event, undefined, sessionTitle, await contextFor(sessionID))
       }
 
       if (event.type === "message.updated") {
@@ -693,7 +734,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
           setInd("working")
           // Only fire for non-subagent sessions
           if (!sessionID || !subagentSessionIds.has(sessionID)) {
-            await handleEvent(config, "user_message", projectName, null, null, sessionID, null, tmuxContext)
+            await handleEvent(config, "user_message", projectName, null, null, sessionID, null, await contextFor(sessionID))
           }
         }
       }
@@ -707,13 +748,14 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
     },
     "tool.execute.before": async (input) => {
       const config = getConfig()
+      const sessionID = resolveContext ? input.sessionID : null
       if (input.tool === "question") {
         setInd("waiting")
-        await handleEvent(config, "question", projectName, null, null, null, null, tmuxContext)
+        await handleEvent(config, "question", projectName, null, null, sessionID, null, await contextFor(sessionID))
       }
       if (input.tool === "plan_exit") {
         setInd("waiting")
-        await handleEvent(config, "plan_exit", projectName, null, null, null, null, tmuxContext)
+        await handleEvent(config, "plan_exit", projectName, null, null, sessionID, null, await contextFor(sessionID))
       }
     },
   }

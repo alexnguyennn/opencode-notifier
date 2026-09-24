@@ -22,9 +22,10 @@
     "logos"
   ],
   "scripts": {
-    "build": "bun run build:v1 && bun run build:v2",
+    "build": "bun run build:v1 && bun run build:v2 && bun run build:tui",
     "build:v1": "bun build src/index.ts --outdir dist --target node --external node-notifier",
     "build:v2": "bun build src/v2.ts --outfile dist/v2.js --target node --external node-notifier",
+    "build:tui": "bun build src/v2-tui.ts --outfile dist/v2-tui.js --target bun",
     "prepublishOnly": "bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test"

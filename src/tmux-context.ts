@@ -15,6 +15,8 @@ import { execFileSync } from "child_process"
  * click-to-focus still works for that path.
  */
 export interface TmuxContext {
+  /** Explicit socket for TUI-owned V2 registrations; absent for V1/default tmux. */
+  socketPath?: string
   /** %NN tmux pane id. Empty string if not in tmux. */
   paneId: string
   /** @NN tmux window id. Empty string if not in tmux. */

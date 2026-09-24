@@ -13,6 +13,7 @@
 #                            a live pane hosting the target tmux session. When
 #                            non-empty we use `wezterm cli activate-pane
 #                            --pane-id $3` as a last resort.
+#   $4  tmux socket path     for V2 TUI registration (may be empty)
 #
 # Focus resolution strategy (when $1 is a tmux target):
 #
@@ -53,6 +54,7 @@ fi
 TARGET="${1:-}"
 APP="${2:-}"
 WEZTERM_PANE_ID_FALLBACK="${3:-}"
+TMUX_SOCKET="${4:-}"
 
 # ---------- locate binaries ----------
 
@@ -80,6 +82,10 @@ TMUX_BIN=$(find_cmd tmux \
   /etc/profiles/per-user/$USER/bin/tmux \
   /run/current-system/sw/bin/tmux \
   /usr/bin/tmux) || true
+TMUX_ARGS=()
+if [[ -n "$TMUX_SOCKET" ]]; then
+  TMUX_ARGS=(-S "$TMUX_SOCKET")
+fi
 
 # WezTerm is commonly drag-and-dropped into /Applications without adding
 # `wezterm` to PATH, so probe the canonical bundle path as a fallback.
@@ -89,6 +95,12 @@ WEZTERM_BIN=$(find_cmd wezterm \
   /etc/profiles/per-user/$USER/bin/wezterm \
   /run/current-system/sw/bin/wezterm \
   /Applications/WezTerm.app/Contents/MacOS/wezterm) || true
+
+# A long-lived tmux/OpenCode process can retain a GUI socket from an old
+# WezTerm launch. Let the CLI discover the current GUI when that socket is gone.
+if [[ -n "${WEZTERM_UNIX_SOCKET:-}" && ! -S "$WEZTERM_UNIX_SOCKET" ]]; then
+  unset WEZTERM_UNIX_SOCKET
+fi
 
 OSASCRIPT_BIN=/usr/bin/osascript
 
@@ -103,6 +115,7 @@ OSASCRIPT_BIN=/usr/bin/osascript
 #   RESOLVED_CLIENT_TTY    tmux client tty (/dev/ttysNN), or empty
 
 RESOLVED_WEZTERM_PANE=""
+RESOLVED_WEZTERM_TAB=""
 RESOLVED_CLIENT_TTY=""
 
 resolve_live_pane() {
@@ -112,9 +125,10 @@ resolve_live_pane() {
 
   # Ask tmux which client ttys are currently on this session. There may be
   # 0 (detached), 1 (typical), or >1 (shared session) attached clients.
-  # Take the first non-empty line.
+  # Prefer the registered host pane; if it moved, use the sole attached
+  # client. V1 keeps its historical first-client fallback.
   local ttys
-  ttys=$("$TMUX_BIN" list-clients -t "$session_id" -F '#{client_tty}' 2>/dev/null) || return 0
+  ttys=$("$TMUX_BIN" "${TMUX_ARGS[@]}" list-clients -t "$session_id" -F '#{client_tty}' 2>/dev/null) || return 0
   [[ -n "$ttys" ]] || return 0
 
   # For each attached tty, find a wezterm pane with matching tty_name.
@@ -127,20 +141,49 @@ resolve_live_pane() {
   local tty
   while IFS= read -r tty; do
     [[ -n "$tty" ]] || continue
-    # Extract pane_id for the wezterm pane whose tty_name == $tty.
+    # Extract pane and tab ids for the registered WezTerm pane on this tty.
     # jq would be cleanest but we can't count on it; use a one-liner
     # python fallback that's on macOS by default.
-    local pane_id
-    pane_id=$(/usr/bin/env python3 -c "
+    local pane_info
+    pane_info=$(/usr/bin/env python3 -c "
 import json, sys
 want = sys.argv[1]
+preferred = sys.argv[3]
 for p in json.loads(sys.argv[2]):
-    if p.get('tty_name') == want:
-        print(p.get('pane_id', ''))
+    if p.get('tty_name') == want and str(p.get('pane_id', '')) == preferred:
+        print(str(p.get('pane_id', '')) + ' ' + str(p.get('tab_id', '')))
+        break
+" "$tty" "$wezterm_json" "$WEZTERM_PANE_ID_FALLBACK" 2>/dev/null) || continue
+    if [[ -n "$pane_info" ]]; then
+      read -r RESOLVED_WEZTERM_PANE RESOLVED_WEZTERM_TAB <<< "$pane_info"
+      RESOLVED_CLIENT_TTY=$tty
+      return 0
+    fi
+  done <<< "$ttys"
+
+  # A shared tmux session can have several attached clients. A V2 registration
+  # must not choose another client's pane merely because it appears first.
+  if [[ -n "$TMUX_SOCKET" ]]; then
+    local count=0
+    local tty
+    while IFS= read -r tty; do
+      [[ -n "$tty" ]] && ((count+=1))
+    done <<< "$ttys"
+    if (( count != 1 )); then return 0; fi
+  fi
+
+  while IFS= read -r tty; do
+    [[ -n "$tty" ]] || continue
+    local pane_info
+    pane_info=$(/usr/bin/env python3 -c "
+import json, sys
+for p in json.loads(sys.argv[2]):
+    if p.get('tty_name') == sys.argv[1]:
+        print(str(p.get('pane_id', '')) + ' ' + str(p.get('tab_id', '')))
         break
 " "$tty" "$wezterm_json" 2>/dev/null) || continue
-    if [[ -n "$pane_id" ]]; then
-      RESOLVED_WEZTERM_PANE=$pane_id
+    if [[ -n "$pane_info" ]]; then
+      read -r RESOLVED_WEZTERM_PANE RESOLVED_WEZTERM_TAB <<< "$pane_info"
       RESOLVED_CLIENT_TTY=$tty
       return 0
     fi
@@ -168,6 +211,9 @@ elif [[ -n "$WEZTERM_PANE_ID_FALLBACK" ]]; then
 fi
 
 if [[ -n "$WEZTERM_PANE_TO_USE" && -n "$WEZTERM_BIN" ]]; then
+  if [[ -n "$RESOLVED_WEZTERM_TAB" ]]; then
+    "$WEZTERM_BIN" cli activate-tab --tab-id "$RESOLVED_WEZTERM_TAB" >/dev/null 2>&1 || true
+  fi
   "$WEZTERM_BIN" cli activate-pane --pane-id "$WEZTERM_PANE_TO_USE" >/dev/null 2>&1 || true
 fi
 
@@ -181,18 +227,26 @@ fi
 
 if [[ -n "$TARGET" && -n "$TMUX_BIN" ]]; then
   SESSION=${TARGET%%:*}
-  if [[ -n "$RESOLVED_CLIENT_TTY" ]]; then
+  if [[ -n "$TMUX_SOCKET" ]]; then
+    # V2 has a verified pane and socket. Never switch an arbitrary client or
+    # start an invisible attach-session when the host client cannot be found.
+    if [[ -n "$RESOLVED_CLIENT_TTY" ]]; then
+      "$TMUX_BIN" "${TMUX_ARGS[@]}" switch-client -c "$RESOLVED_CLIENT_TTY" -t "$SESSION" 2>/dev/null || true
+    fi
+    "$TMUX_BIN" "${TMUX_ARGS[@]}" select-window -t "$TARGET" 2>/dev/null || true
+    "$TMUX_BIN" "${TMUX_ARGS[@]}" select-pane -t "$TARGET" 2>/dev/null || true
+  elif [[ -n "$RESOLVED_CLIENT_TTY" ]]; then
     # Fast path: we know exactly which client to target. This also
     # confirms that client is attached, so no attach-session fallback
     # is needed.
-    "$TMUX_BIN" switch-client -c "$RESOLVED_CLIENT_TTY" -t "$TARGET" 2>/dev/null || true
+    "$TMUX_BIN" "${TMUX_ARGS[@]}" switch-client -c "$RESOLVED_CLIENT_TTY" -t "$TARGET" 2>/dev/null || true
   else
     # Fallback: no resolved client. Try the generic switch-client; if no
     # client is attached at all, attempt attach-session in the background
     # so the next terminal that opens picks it up.
-    if ! "$TMUX_BIN" switch-client -t "$TARGET" 2>/dev/null; then
-      "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null && \
-        "$TMUX_BIN" attach-session -d -t "$TARGET" >/dev/null 2>&1 &
+    if ! "$TMUX_BIN" "${TMUX_ARGS[@]}" switch-client -t "$TARGET" 2>/dev/null; then
+      "$TMUX_BIN" "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null && \
+        "$TMUX_BIN" "${TMUX_ARGS[@]}" attach-session -d -t "$TARGET" >/dev/null 2>&1 &
     fi
   fi
 fi
