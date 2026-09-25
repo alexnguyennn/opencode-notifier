@@ -128,6 +128,8 @@ The pane RPC route is also global: updates can land on `/Users/alex` while compl
 
 The focus helper clears a stale `WEZTERM_UNIX_SOCKET`, maps the registered tmux client's tty to a live WezTerm pane **and tab**, activates both, selects the exact tmux window/pane, then raises the terminal. `activate-pane` alone leaves another WezTerm tab visible. The active Hammerspoon notification picker now leaves Notification Center closure to a successful notification action, rather than sending Escape shortly after activation.
 
+For non-consuming Hammerspoon focus, terminal-notifier alerts with a pane now carry a short body token. `src/focus-actions.ts` saves the corresponding target in private files under `~/.local/state/opencode-notifier/focus-actions/`; the picker reads that record and invokes the helper without clicking the NC item. The helper's fifth argument checks that a saved tmux pane still runs OpenCode. The native `-execute` action remains available for consuming clicks. WezTerm tab/pane activation does not raise a *different native WezTerm window*; the helper also raises the window matching a uniquely identified live mux window title.
+
 The active profile loads `plugin/opencode-notifier.ts` for the server and `plugins/opencode-notifier-pane/tui.ts` for the TUI. Build all three bundles with `mise x bun@1.3.13 -- bun run build`, then restart the shared service and each TUI to load both entrypoints. For another installation, provide both a V2 server entrypoint loading `dist/v2.js` and a V2 TUI entrypoint loading `dist/v2-tui.js`.
 
 Live smoke matrix (after restarting; keep the server shared):
@@ -137,7 +139,7 @@ Live smoke matrix (after restarting; keep the server shared):
 3. Complete a server-created session with no TUI viewer. It should still notify with no focus action. Close a TUI or wait over four seconds after disconnect and repeat to check lease expiry.
 4. Repeat with a non-default tmux socket (`tmux -L ...`) to confirm the click helper passes the registered socket to tmux.
 
-Progress board: delivery and cross-location focus bridge implemented; same-folder two-session delivery and isolated-socket completion click verified through native Notification Center and the Hammerspoon picker. A fresh question alert in the user's reopened TUI focused its exact pane (`%110`) through the picker. Question/plan/permission/error resolver and subagent-parent tests pass. A fresh permission click and two-TUI same-session viewer-switch smoke remain available as follow-up checks; reopen TUIs after any server restart to restore leases.
+Progress board: delivery and cross-location focus bridge implemented; same-folder two-session delivery and isolated-socket completion click verified through native Notification Center and the Hammerspoon picker. A fresh question alert in the user's reopened TUI focused its exact pane (`%110`). Non-consuming Enter focus (with alert retained), consuming Command-Return/right-click, and individual Command-Backspace dismissal were live-proven with disposable alerts; cross-window WezTerm focus was also verified. Question/plan/permission/error resolver and subagent-parent tests pass. A fresh permission click and two-TUI same-session viewer-switch smoke remain follow-up checks; reopen TUIs after any server restart to restore leases.
 
 - `mise x bun@1.3.13 -- bun test` in the repo root. Covers config parsing, focus detection,
   permission dedupe, `deriveMacAppName`, indicator idempotence, and

@@ -6,6 +6,7 @@ import notifier from "node-notifier"
 import isWsl from "is-wsl"
 import type { TmuxContext } from "./tmux-context"
 import type { MacNotifier } from "./config"
+import { focusMessage, newFocusToken, pruneFocusActions, removeFocusAction, saveFocusAction } from "./focus-actions"
 
 const DEBOUNCE_MS = 1000
 
@@ -349,8 +350,21 @@ export async function sendNotification(
     if (macBackend === "terminal-notifier") {
       const tn = resolveTerminalNotifier()
       if (tn) {
+        let deliveredMessage = message
+        let focusToken: string | null = null
+        if (options.tmuxContext) {
+          const token = newFocusToken()
+          try {
+            await saveFocusAction(token, resolveFocusScript(), options.tmuxContext)
+            deliveredMessage = focusMessage(message, token)
+            focusToken = token
+            void pruneFocusActions().catch(() => undefined)
+          } catch (error) {
+            console.error("[opencode-notifier] could not save picker focus target", error)
+          }
+        }
         return new Promise((resolve) => {
-          const args = ["-title", title, "-message", message]
+          const args = ["-title", title, "-message", deliveredMessage]
           if (options.groupId) {
             args.push("-group", options.groupId)
           }
@@ -366,7 +380,10 @@ export async function sendNotification(
             const executeCmd = `${sq(script)} ${sq(ctx.target)} ${sq(ctx.appName ?? "")} ${sq(ctx.weztermPaneId ?? "")} ${sq(ctx.socketPath ?? "")}`
             args.push("-execute", executeCmd)
           }
-          execFile(tn, args, { timeout: 5000 }, () => resolve())
+          execFile(tn, args, { timeout: 5000 }, (error) => {
+            if (error && focusToken) void removeFocusAction(focusToken)
+            resolve()
+          })
         })
       }
       // fell through - no terminal-notifier available; fall back to osascript

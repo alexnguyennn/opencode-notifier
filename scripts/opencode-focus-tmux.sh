@@ -14,6 +14,7 @@
 #                            non-empty we use `wezterm cli activate-pane
 #                            --pane-id $3` as a last resort.
 #   $4  tmux socket path     for V2 TUI registration (may be empty)
+#   $5  expected pane id    for persisted picker targets (may be empty)
 #
 # Focus resolution strategy (when $1 is a tmux target):
 #
@@ -55,6 +56,7 @@ TARGET="${1:-}"
 APP="${2:-}"
 WEZTERM_PANE_ID_FALLBACK="${3:-}"
 TMUX_SOCKET="${4:-}"
+EXPECTED_PANE_ID="${5:-}"
 
 # ---------- locate binaries ----------
 
@@ -87,6 +89,15 @@ if [[ -n "$TMUX_SOCKET" ]]; then
   TMUX_ARGS=(-S "$TMUX_SOCKET")
 fi
 
+# Picker records outlive TUI leases. Never reuse an old target if its pane
+# disappeared or now runs something other than OpenCode. Native NC clicks do
+# not pass $5 and keep their existing behavior.
+if [[ -n "$EXPECTED_PANE_ID" ]]; then
+  [[ -n "$TARGET" && -n "$TMUX_BIN" ]] || exit 1
+  PANE_STATE=$("$TMUX_BIN" "${TMUX_ARGS[@]}" display-message -p -t "$TARGET" '#{pane_id} #{pane_current_command}' 2>/dev/null) || exit 1
+  [[ "$PANE_STATE" == "$EXPECTED_PANE_ID opencode" || "$PANE_STATE" == "$EXPECTED_PANE_ID opencode-v2" ]] || exit 1
+fi
+
 # WezTerm is commonly drag-and-dropped into /Applications without adding
 # `wezterm` to PATH, so probe the canonical bundle path as a fallback.
 WEZTERM_BIN=$(find_cmd wezterm \
@@ -112,10 +123,12 @@ OSASCRIPT_BIN=/usr/bin/osascript
 #
 # Outputs (global vars):
 #   RESOLVED_WEZTERM_PANE  numeric wezterm pane id, or empty
+#   RESOLVED_WEZTERM_WINDOW_TITLE unique native window title, or empty
 #   RESOLVED_CLIENT_TTY    tmux client tty (/dev/ttysNN), or empty
 
 RESOLVED_WEZTERM_PANE=""
 RESOLVED_WEZTERM_TAB=""
+RESOLVED_WEZTERM_WINDOW_TITLE=""
 RESOLVED_CLIENT_TTY=""
 
 resolve_live_pane() {
@@ -149,13 +162,16 @@ resolve_live_pane() {
 import json, sys
 want = sys.argv[1]
 preferred = sys.argv[3]
-for p in json.loads(sys.argv[2]):
+panes = json.loads(sys.argv[2])
+for p in panes:
     if p.get('tty_name') == want and str(p.get('pane_id', '')) == preferred:
-        print(str(p.get('pane_id', '')) + ' ' + str(p.get('tab_id', '')))
+        title = p.get('window_title', '')
+        unique = title and len({v.get('window_id') for v in panes if v.get('window_title') == title}) == 1
+        print(str(p.get('pane_id', '')) + '\t' + str(p.get('tab_id', '')) + '\t' + (title if unique else ''))
         break
 " "$tty" "$wezterm_json" "$WEZTERM_PANE_ID_FALLBACK" 2>/dev/null) || continue
     if [[ -n "$pane_info" ]]; then
-      read -r RESOLVED_WEZTERM_PANE RESOLVED_WEZTERM_TAB <<< "$pane_info"
+      IFS=$'\t' read -r RESOLVED_WEZTERM_PANE RESOLVED_WEZTERM_TAB RESOLVED_WEZTERM_WINDOW_TITLE <<< "$pane_info"
       RESOLVED_CLIENT_TTY=$tty
       return 0
     fi
@@ -177,13 +193,16 @@ for p in json.loads(sys.argv[2]):
     local pane_info
     pane_info=$(/usr/bin/env python3 -c "
 import json, sys
-for p in json.loads(sys.argv[2]):
+panes = json.loads(sys.argv[2])
+for p in panes:
     if p.get('tty_name') == sys.argv[1]:
-        print(str(p.get('pane_id', '')) + ' ' + str(p.get('tab_id', '')))
+        title = p.get('window_title', '')
+        unique = title and len({v.get('window_id') for v in panes if v.get('window_title') == title}) == 1
+        print(str(p.get('pane_id', '')) + '\t' + str(p.get('tab_id', '')) + '\t' + (title if unique else ''))
         break
 " "$tty" "$wezterm_json" 2>/dev/null) || continue
     if [[ -n "$pane_info" ]]; then
-      read -r RESOLVED_WEZTERM_PANE RESOLVED_WEZTERM_TAB <<< "$pane_info"
+      IFS=$'\t' read -r RESOLVED_WEZTERM_PANE RESOLVED_WEZTERM_TAB RESOLVED_WEZTERM_WINDOW_TITLE <<< "$pane_info"
       RESOLVED_CLIENT_TTY=$tty
       return 0
     fi
@@ -270,6 +289,15 @@ if [[ -n "$APP" && -x $OSASCRIPT_BIN ]]; then
       "$OSASCRIPT_BIN" -e 'tell application "WezTerm" to activate' >/dev/null 2>&1 || \
         "$OSASCRIPT_BIN" -e 'tell application "System Events" to tell process "wezterm-gui" to set frontmost to true' >/dev/null 2>&1 || \
         true
+      # CLI tab/pane activation does not raise a different native WezTerm
+      # window. Only use a title if it identifies exactly one mux window.
+      if [[ -n "$RESOLVED_WEZTERM_WINDOW_TITLE" ]]; then
+        "$OSASCRIPT_BIN" -e 'on run argv' \
+          -e 'tell application "System Events" to tell process "wezterm-gui"' \
+          -e 'set frontmost to true' \
+          -e 'perform action "AXRaise" of (first window whose name is item 1 of argv)' \
+          -e 'end tell' -e 'end run' "$RESOLVED_WEZTERM_WINDOW_TITLE" >/dev/null 2>&1 || true
+      fi
       ;;
     *)
       # Generic path: System Events process form first (silent if not running), then launch.
