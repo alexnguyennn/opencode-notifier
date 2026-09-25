@@ -295,6 +295,9 @@ export function buildOsascriptNotificationArgs(title: string, message: string): 
 export interface SendNotificationOptions {
   /** macOS-only: when present + backend resolves to terminal-notifier, clicking the notification runs the focus-tmux helper against this context. */
   tmuxContext?: TmuxContext | null
+  /** Human-readable picker metadata; never part of the routing key. */
+  sessionTitle?: string | null
+  projectName?: string | null
   /** macOS-only override. Defaults to legacy `notificationSystem` mapping for backward compat. */
   macNotifier?: MacNotifier
   /** Group id for collapsing stale notifications (terminal-notifier `-group`). */
@@ -355,7 +358,7 @@ export async function sendNotification(
         if (options.tmuxContext) {
           const token = newFocusToken()
           try {
-            await saveFocusAction(token, resolveFocusScript(), options.tmuxContext)
+            await saveFocusAction(token, resolveFocusScript(), options.tmuxContext, undefined, options)
             deliveredMessage = focusMessage(message, token)
             focusToken = token
             void pruneFocusActions().catch(() => undefined)

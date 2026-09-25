@@ -217,6 +217,8 @@ async function handleEvent(
         config.linux.grouping,
         {
           tmuxContext: clickCtx,
+          sessionTitle,
+          projectName,
           macNotifier: config.macNotifier,
           groupId,
           dedupeKey: options?.notificationDedupeKey,
@@ -550,7 +552,7 @@ async function handleEventWithElapsedTime(
   }
 
   let sessionTitle: string | null = preloadedSessionTitle ?? null
-  const shouldLookupSessionInfo = sessionID && !sessionTitle && (config.showSessionTitle || shouldResolveAgentNameForEvent(config, eventType))
+  const shouldLookupSessionInfo = sessionID && !sessionTitle && (config.showSessionTitle || shouldResolveAgentNameForEvent(config, eventType) || (process.platform === "darwin" && !!tmuxContext))
   if (shouldLookupSessionInfo) {
     const info = await getSessionInfo(client, sessionID)
     sessionTitle = info.title

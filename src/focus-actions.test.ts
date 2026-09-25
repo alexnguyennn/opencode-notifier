@@ -13,10 +13,12 @@ test("persists separate actionable alerts without changing their titles or mixin
     sessionName: "test", label: "test", appName: "WezTerm", weztermPaneId: "7", socketPath: "/tmp/tmux.sock",
   })
   try {
-    await saveFocusAction(first, "/focus-helper", ctx("%3"), directory)
+    await saveFocusAction(first, "/focus-helper", ctx("%3"), directory, { sessionTitle: "  Fix\n picker  ", projectName: "demo" })
     await saveFocusAction(second, "/focus-helper", ctx("%4"), directory)
     expect(focusMessage("Session has finished", first)).toBe("Session has finished · [focus:0a1b2c3d4e5f]")
     expect(JSON.parse(readFileSync(join(directory, `${first}.json`), "utf8")).target).toBe("$1:@2.%3")
+    expect(JSON.parse(readFileSync(join(directory, `${first}.json`), "utf8")).sessionTitle).toBe("Fix picker")
+    expect(JSON.parse(readFileSync(join(directory, `${first}.json`), "utf8")).projectName).toBe("demo")
     expect(JSON.parse(readFileSync(join(directory, `${second}.json`), "utf8")).target).toBe("$1:@2.%4")
     expect(statSync(join(directory, `${first}.json`)).mode & 0o777).toBe(0o600)
     const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)
