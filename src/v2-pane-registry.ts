@@ -7,6 +7,10 @@ export interface PaneRegistration {
   paneID: string
   appName: string
   weztermPaneID: string
+  herdrPaneID?: string
+  herdrSocketPath?: string
+  herdrTerminalID?: string
+  weztermUnixSocket?: string
 }
 
 interface Viewer extends PaneRegistration {
@@ -25,7 +29,7 @@ export class PaneRegistry {
     this.viewers.set(input.clientID, {
       ...input,
       expiresAt: now + PANE_LEASE_MS,
-      activated: old && old.sessionID === input.sessionID && old.socketPath === input.socketPath && old.paneID === input.paneID
+      activated: old && old.sessionID === input.sessionID && old.socketPath === input.socketPath && old.paneID === input.paneID && old.herdrPaneID === input.herdrPaneID && old.herdrSocketPath === input.herdrSocketPath && old.herdrTerminalID === input.herdrTerminalID
         ? old.activated
         : ++this.activation,
     })

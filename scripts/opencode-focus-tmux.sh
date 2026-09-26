@@ -15,6 +15,8 @@
 #                            --pane-id $3` as a last resort.
 #   $4  tmux socket path     for V2 TUI registration (may be empty)
 #   $5  expected pane id    for persisted picker targets (may be empty)
+#   $6-10 Herdr pane, Herdr socket, terminal identity, WezTerm GUI socket,
+#         and OpenCode session ID (all required for a Herdr target)
 #
 # Focus resolution strategy (when $1 is a tmux target):
 #
@@ -57,6 +59,11 @@ APP="${2:-}"
 WEZTERM_PANE_ID_FALLBACK="${3:-}"
 TMUX_SOCKET="${4:-}"
 EXPECTED_PANE_ID="${5:-}"
+HERDR_PANE_ID="${6:-}"
+HERDR_SOCKET="${7:-}"
+HERDR_TERMINAL_ID="${8:-}"
+WEZTERM_GUI_SOCKET="${9:-}"
+HERDR_SESSION_ID="${10:-}"
 
 # ---------- locate binaries ----------
 
@@ -106,6 +113,60 @@ WEZTERM_BIN=$(find_cmd wezterm \
   /etc/profiles/per-user/$USER/bin/wezterm \
   /run/current-system/sw/bin/wezterm \
   /Applications/WezTerm.app/Contents/MacOS/wezterm) || true
+
+if [[ -n "$HERDR_PANE_ID" ]]; then
+  HERDR_BIN=$(find_cmd herdr /opt/homebrew/bin/herdr /usr/local/bin/herdr /etc/profiles/per-user/$USER/bin/herdr) || exit 1
+  [[ "$HERDR_PANE_ID" =~ ^w[0-9]+:p[0-9]+$ && "$HERDR_SOCKET" == /* && -n "$HERDR_TERMINAL_ID" && -n "$HERDR_SESSION_ID" && "$WEZTERM_GUI_SOCKET" == /* && -n "$WEZTERM_PANE_ID_FALLBACK" && -n "$WEZTERM_BIN" ]] || exit 1
+
+  # A saved pane ID alone is not enough: closed panes and replaced agents must fail.
+  local_agent=$(HERDR_SOCKET_PATH="$HERDR_SOCKET" "$HERDR_BIN" agent get "$HERDR_PANE_ID" 2>/dev/null) || exit 1
+  /usr/bin/env python3 -c '
+import json, sys
+try:
+    agent = json.loads(sys.argv[4])["result"]["agent"]
+    assert agent["agent"] == "opencode"
+    assert agent["pane_id"] == sys.argv[1]
+    assert agent["terminal_id"] == sys.argv[2]
+    assert agent["agent_session"]["value"] == sys.argv[3]
+except (KeyError, TypeError, ValueError, AssertionError):
+    sys.exit(1)
+' "$HERDR_PANE_ID" "$HERDR_TERMINAL_ID" "$HERDR_SESSION_ID" "$local_agent" || exit 1
+
+  # The GUI socket is captured by the TUI, so another WezTerm instance cannot
+  # intercept an identical numeric pane ID. Require one native window title in
+  # that GUI before changing focus.
+  gui_pid=${WEZTERM_GUI_SOCKET##*gui-sock-}
+  [[ "$gui_pid" =~ ^[0-9]+$ ]] || exit 1
+  /bin/ps -p "$gui_pid" -o comm= 2>/dev/null | /usr/bin/grep -q 'wezterm-gui' || exit 1
+  gui_panes=$(WEZTERM_UNIX_SOCKET="$WEZTERM_GUI_SOCKET" "$WEZTERM_BIN" cli list --format json 2>/dev/null) || exit 1
+  pane_info=$(/usr/bin/env python3 -c '
+import json, sys
+try:
+    panes = json.loads(sys.argv[1])
+    matches = [p for p in panes if str(p.get("pane_id")) == sys.argv[2]]
+    assert len(matches) == 1
+    pane = matches[0]
+    title = pane.get("window_title")
+    assert title and len({p.get("window_id") for p in panes if p.get("window_title") == title}) == 1
+    print(str(pane["tab_id"]) + "\t" + title)
+except (ValueError, KeyError, TypeError, AssertionError):
+    sys.exit(1)
+' "$gui_panes" "$WEZTERM_PANE_ID_FALLBACK") || exit 1
+  IFS=$'\t' read -r gui_tab gui_title <<< "$pane_info"
+
+  HERDR_SOCKET_PATH="$HERDR_SOCKET" "$HERDR_BIN" agent focus "$HERDR_PANE_ID" >/dev/null 2>&1 || exit 1
+  WEZTERM_UNIX_SOCKET="$WEZTERM_GUI_SOCKET" "$WEZTERM_BIN" cli activate-tab --tab-id "$gui_tab" >/dev/null 2>&1 || exit 1
+  WEZTERM_UNIX_SOCKET="$WEZTERM_GUI_SOCKET" "$WEZTERM_BIN" cli activate-pane --pane-id "$WEZTERM_PANE_ID_FALLBACK" >/dev/null 2>&1 || exit 1
+  /usr/bin/osascript -e 'on run argv' \
+    -e 'tell application "System Events"' \
+    -e 'tell (first process whose unix id is (item 1 of argv as integer))' \
+    -e 'set frontmost to true' \
+    -e 'set matches to every window whose name is item 2 of argv' \
+    -e 'if (count of matches) is not 1 then error "ambiguous WezTerm window"' \
+    -e 'perform action "AXRaise" of item 1 of matches' \
+    -e 'end tell' -e 'end tell' -e 'end run' "$gui_pid" "$gui_title" >/dev/null 2>&1 || exit 1
+  exit 0
+fi
 
 # A long-lived tmux/OpenCode process can retain a GUI socket from an old
 # WezTerm launch. Let the CLI discover the current GUI when that socket is gone.

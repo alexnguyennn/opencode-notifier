@@ -37,3 +37,22 @@ test("persists separate actionable alerts without changing their titles or mixin
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test("persists a Herdr pane identity separately from tmux fields", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "notifier-herdr-action-"))
+  const token = "beef1234abcd"
+  try {
+    await saveFocusAction(token, "/focus-helper", {
+      target: "", paneId: "", windowId: "", sessionId: "", sessionName: "", label: "Herdr w3:p1",
+      appName: "WezTerm", weztermPaneId: "0", socketPath: "",
+      herdrPaneID: "w3:p1", herdrSocketPath: "/herdr.sock", herdrTerminalID: "term_one",
+      herdrSessionID: "ses_one", weztermUnixSocket: "/gui-sock-1",
+    }, directory)
+    expect(JSON.parse(readFileSync(join(directory, `${token}.json`), "utf8"))).toMatchObject({
+      target: "", paneID: "", herdrPaneID: "w3:p1", herdrTerminalID: "term_one",
+      herdrSessionID: "ses_one", weztermUnixSocket: "/gui-sock-1",
+    })
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

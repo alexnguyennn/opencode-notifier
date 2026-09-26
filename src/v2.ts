@@ -2,6 +2,7 @@ import type { Context, Plugin } from "@opencode/plugin/promise/plugin"
 import { createNotifierV2Hooks, notifyV2Completion } from "./index"
 import { PaneRegistry, paneContext, type PaneRegistration } from "./v2-pane-registry"
 import { paneRPC } from "./v2-pane-rpc"
+import { getHerdrAgent } from "./herdr-pane"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
@@ -14,7 +15,20 @@ const serverState = globalThis as typeof globalThis & { __opencodeNotifierV2Pane
 const panes = serverState.__opencodeNotifierV2Panes ??= new PaneRegistry()
 
 /** Resolve the pane on its own tmux socket at emission time; never trust stale registration metadata. */
-async function resolvePane(owner: PaneRegistration) {
+export async function resolvePane(owner: PaneRegistration, herdrAgent = getHerdrAgent) {
+  if (owner.herdrPaneID) {
+    if (!owner.herdrSocketPath || !owner.herdrTerminalID || !owner.weztermUnixSocket || !owner.weztermPaneID) return null
+    const agent = await herdrAgent(owner.herdrPaneID, owner.herdrSocketPath)
+    if (!agent || agent.terminalID !== owner.herdrTerminalID || agent.sessionID !== owner.sessionID) return null
+    return {
+      paneId: "", windowId: "", sessionId: "", sessionName: "", target: "",
+      label: `Herdr ${owner.herdrPaneID}`,
+      appName: owner.appName || null, weztermPaneId: owner.weztermPaneID,
+      socketPath: "", herdrPaneID: owner.herdrPaneID,
+      herdrSocketPath: owner.herdrSocketPath, herdrTerminalID: owner.herdrTerminalID,
+      herdrSessionID: owner.sessionID, weztermUnixSocket: owner.weztermUnixSocket,
+    }
+  }
   try {
     const { stdout } = await execFileAsync("tmux", ["-S", owner.socketPath, "display-message", "-p", "-t", owner.paneID,
       ["#{socket_path}", "#{pane_id}", "#{pane_current_command}", "#{window_id}", "#{session_id}", "#{session_name}", "#{window_index}", "#{window_name}"].join(fields)], { timeout: 1000 })

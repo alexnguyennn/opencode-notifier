@@ -380,7 +380,8 @@ export async function sendNotification(
             // single-quote args. Escape any embedded single quotes.
             const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
             const ctx = options.tmuxContext
-            const executeCmd = `${sq(script)} ${sq(ctx.target)} ${sq(ctx.appName ?? "")} ${sq(ctx.weztermPaneId ?? "")} ${sq(ctx.socketPath ?? "")}`
+            const executeCmd = [script, ctx.target, ctx.appName ?? "", ctx.weztermPaneId ?? "", ctx.socketPath ?? "",
+              "", ctx.herdrPaneID ?? "", ctx.herdrSocketPath ?? "", ctx.herdrTerminalID ?? "", ctx.weztermUnixSocket ?? "", ctx.herdrSessionID ?? ""].map(sq).join(" ")
             args.push("-execute", executeCmd)
           }
           execFile(tn, args, { timeout: 5000 }, (error) => {

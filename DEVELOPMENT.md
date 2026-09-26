@@ -136,6 +136,14 @@ Picker layout work (2026-09-25): the native `OpenCode (<directory>)` title remai
 
 The active profile loads `plugin/opencode-notifier.ts` for the server and `plugins/opencode-notifier-pane/tui.ts` for the TUI. Build all three bundles with `mise x bun@1.3.13 -- bun run build`, then restart the shared service and each TUI to load both entrypoints. For another installation, provide both a V2 server entrypoint loading `dist/v2.js` and a V2 TUI entrypoint loading `dist/v2-tui.js`.
 
+### Herdr V2 viewers (2026-09-26)
+
+The TUI bridge also registers a Herdr pane when `HERDR_ENV=1`, using its inherited `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`. It checks `herdr agent get <pane>` for the active OpenCode session and terminal ID before registering and on each lease refresh. The server checks both again when emitting a session-scoped alert. Its token record stores the Herdr socket/pane/terminal/session separately from tmux and captures the TUI's `WEZTERM_UNIX_SOCKET` and `WEZTERM_PANE`. The focus helper checks the saved occupant, queries that specific WezTerm GUI instance, focuses the Herdr agent, selects the GUI tab/pane, and raises its uniquely matched native window. A stale or replaced pane fails without choosing another agent. The picker retains its separate 12-hex alert token and AX notification identity.
+
+Live proof used a separate WezTerm GUI (`gui-sock-60593`) and a named disposable Herdr server with a `zsh -f` pane; both `TMUX` and `TMUX_PANE` were absent in the pane. A standalone OpenCode TUI's completion, question, and permission events each produced a token-bearing native alert with the same exact Herdr session/pane/terminal/socket identity. Picker Enter from a different app focused that GUI and kept the alert; `⌘Return` on a later completion focused it and consumed exactly that alert. A deliberately mismatched terminal ID made the helper exit without focusing. The shared OpenCode service was not restarted; the proof TUI loaded the freshly built bundles in standalone mode. Reconnect existing TUIs and restart the shared service when activating this change outside the proof setup.
+
+Herdr progress board: discovery, implementation, notifier/Hammerspoon checks, and isolated live proof complete. The disposable Herdr server was stopped, and a focus attempt against its closed socket failed as expected. Activation of the rebuilt server bundle in the shared OpenCode service and reconnection of existing TUIs remain the next deployment step.
+
 Live smoke matrix (after restarting; keep the server shared):
 
 1. Start two tmux/WezTerm TUIs in the **same folder**, each showing a different root session. Submit a prompt to both. Each completion should create its own notification, even if the messages and completion times coincide; click/Enter on each should activate that session's WezTerm/tmux pane.

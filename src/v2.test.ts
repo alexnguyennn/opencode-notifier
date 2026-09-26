@@ -3,9 +3,26 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createNotifierV2Hooks } from "./index"
-import { normalizeV2Event, NotifierPluginV2, setupNotifierV2 } from "./v2"
+import { normalizeV2Event, NotifierPluginV2, resolvePane, setupNotifierV2 } from "./v2"
 
 describe("OpenCode V2 adapter", () => {
+  test("Herdr owner resolves only while its exact terminal and session are live", async () => {
+    const owner = {
+      clientID: "herdr-viewer", sessionID: "ses_one", socketPath: "", paneID: "",
+      appName: "WezTerm", weztermPaneID: "0", herdrPaneID: "w3:p1",
+      herdrSocketPath: "/private/herdr.sock", herdrTerminalID: "term_one",
+      weztermUnixSocket: "/private/gui-sock-123",
+    }
+    const live = { paneID: "w3:p1", terminalID: "term_one", sessionID: "ses_one" }
+    expect(await resolvePane(owner, async () => live)).toMatchObject({
+      herdrPaneID: "w3:p1", herdrTerminalID: "term_one", herdrSessionID: "ses_one",
+      weztermUnixSocket: "/private/gui-sock-123", target: "", weztermPaneId: "0",
+    })
+    expect(await resolvePane(owner, async () => ({ ...live, terminalID: "term_replaced" }))).toBeNull()
+    expect(await resolvePane(owner, async () => ({ ...live, sessionID: "ses_other" }))).toBeNull()
+    expect(await resolvePane(owner, async () => null)).toBeNull()
+  })
+
   test("exports a native V2 plugin definition", () => {
     expect(NotifierPluginV2.id).toBe("opencode-notifier")
     expect(typeof NotifierPluginV2.setup).toBe("function")

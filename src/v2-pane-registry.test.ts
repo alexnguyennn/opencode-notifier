@@ -27,3 +27,18 @@ test("latest viewer wins without heartbeat reshuffling; disposal and expiry remo
   expect(registry.owner("ses_1", 400)?.paneID).toBe("%1")
   expect(registry.owner("ses_1", 4300)).toBeNull()
 })
+
+test("Herdr registration retains its terminal identity and does not reshuffle on heartbeat", () => {
+  const registry = new PaneRegistry()
+  const herdr = {
+    clientID: "herdr-1", sessionID: "ses_herdr", socketPath: "", paneID: "",
+    appName: "WezTerm", weztermPaneID: "0", herdrPaneID: "w3:p1",
+    herdrSocketPath: "/herdr.sock", herdrTerminalID: "term_one", weztermUnixSocket: "/gui-sock-1",
+  }
+  registry.update(herdr, 100)
+  registry.update(pane("tmux-1", "ses_herdr"), 200)
+  registry.update(herdr, 300)
+  expect(registry.owner("ses_herdr", 400)?.clientID).toBe("tmux-1")
+  registry.update({ ...herdr, herdrTerminalID: "term_two" }, 500)
+  expect(registry.owner("ses_herdr", 600)?.herdrTerminalID).toBe("term_two")
+})

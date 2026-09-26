@@ -41,6 +41,11 @@ export async function saveFocusAction(token: string, script: string, ctx: TmuxCo
       appName: ctx.appName ?? "",
       weztermPaneID: ctx.weztermPaneId ?? "",
       socketPath: ctx.socketPath ?? "",
+      herdrPaneID: ctx.herdrPaneID ?? "",
+      herdrSocketPath: ctx.herdrSocketPath ?? "",
+      herdrTerminalID: ctx.herdrTerminalID ?? "",
+      herdrSessionID: ctx.herdrSessionID ?? "",
+      weztermUnixSocket: ctx.weztermUnixSocket ?? "",
       sessionTitle: context.sessionTitle?.replace(/\s+/g, " ").trim().slice(0, 120) ?? "",
       projectName: context.projectName?.replace(/\s+/g, " ").trim().slice(0, 80) ?? "",
     }), { mode: 0o600, flag: "wx" })

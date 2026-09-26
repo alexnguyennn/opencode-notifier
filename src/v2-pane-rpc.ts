@@ -9,6 +9,7 @@ export const paneRPC = {
         properties: {
           clientID: text, sessionID: text, socketPath: text,
           paneID: text, appName: text, weztermPaneID: text,
+          herdrPaneID: text, herdrSocketPath: text, herdrTerminalID: text, weztermUnixSocket: text,
         },
         required: ["clientID", "sessionID", "socketPath", "paneID", "appName", "weztermPaneID"],
         additionalProperties: false,

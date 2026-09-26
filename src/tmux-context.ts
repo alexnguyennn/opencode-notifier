@@ -33,6 +33,13 @@ export interface TmuxContext {
   appName: string | null
   /** WezTerm pane id (string of the numeric value), or null if host isn't WezTerm. */
   weztermPaneId: string | null
+  /** Exact Herdr TUI occupant for non-tmux V2 viewers. */
+  herdrPaneID?: string
+  herdrSocketPath?: string
+  herdrTerminalID?: string
+  herdrSessionID?: string
+  /** The WezTerm GUI socket of the TUI, not the notifier server's terminal. */
+  weztermUnixSocket?: string
 }
 
 const MAC_TERM_PROGRAM_TO_APP: Record<string, string> = {
