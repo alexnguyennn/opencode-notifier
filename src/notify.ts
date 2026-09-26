@@ -6,7 +6,7 @@ import notifier from "node-notifier"
 import isWsl from "is-wsl"
 import type { TmuxContext } from "./tmux-context"
 import type { MacNotifier } from "./config"
-import { focusMessage, newFocusToken, pruneFocusActions, removeFocusAction, saveFocusAction } from "./focus-actions"
+import { focusMessage, newFocusToken, pruneFocusActions, removeFocusAction, saveFocusAction, sessionMessage } from "./focus-actions"
 
 const DEBOUNCE_MS = 1000
 
@@ -353,13 +353,13 @@ export async function sendNotification(
     if (macBackend === "terminal-notifier") {
       const tn = resolveTerminalNotifier()
       if (tn) {
-        let deliveredMessage = message
+        let deliveredMessage = sessionMessage(message, options.sessionTitle)
         let focusToken: string | null = null
         if (options.tmuxContext) {
           const token = newFocusToken()
           try {
             await saveFocusAction(token, resolveFocusScript(), options.tmuxContext, undefined, options)
-            deliveredMessage = focusMessage(message, token)
+            deliveredMessage = focusMessage(message, token, options.sessionTitle)
             focusToken = token
             void pruneFocusActions().catch(() => undefined)
           } catch (error) {
@@ -396,7 +396,7 @@ export async function sendNotification(
       return new Promise((resolve) => {
         const notificationOptions: any = {
           title: title,
-          message: message,
+          message: sessionMessage(message, options.sessionTitle),
           timeout: timeout,
           icon: iconPath,
         }
@@ -409,7 +409,7 @@ export async function sendNotification(
 
     // osascript fallback (legacy behaviour, no click-to-focus)
     return new Promise((resolve) => {
-      execFile("osascript", buildOsascriptNotificationArgs(title, message), () => {
+      execFile("osascript", buildOsascriptNotificationArgs(title, sessionMessage(message, options.sessionTitle)), () => {
         resolve()
       })
     })

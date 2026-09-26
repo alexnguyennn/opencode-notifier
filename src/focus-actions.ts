@@ -15,9 +15,14 @@ export function newFocusToken(): string {
   return randomBytes(6).toString("hex")
 }
 
-export function focusMessage(message: string, token: string): string {
+export function sessionMessage(message: string, sessionTitle?: string | null): string {
+  const title = sessionTitle?.replace(/\s+/g, " ").trim().slice(0, 120)
+  return title && !message.includes(title) ? `${title} — ${message}` : message
+}
+
+export function focusMessage(message: string, token: string, sessionTitle?: string | null): string {
   if (!TOKEN.test(token)) throw new Error("invalid focus token")
-  return `${message} · [focus:${token}]`
+  return `${sessionMessage(message, sessionTitle)} · [focus:${token}]`
 }
 
 export async function saveFocusAction(token: string, script: string, ctx: TmuxContext, directory = focusActionDirectory(), context: { sessionTitle?: string | null; projectName?: string | null } = {}): Promise<void> {
